@@ -8,6 +8,7 @@ from master.master import (
     handle_client,
     load_or_create_config as load_master_config,
     send_heartbeat_to_worker,
+    start_master_heartbeat_loop,
 )
 from protocol import (
     MasterRegistry,
@@ -17,7 +18,7 @@ from protocol import (
     send_msg,
     validate_message,
 )
-from worker.worker import WorkerControlSession, load_or_create_config as load_worker_config
+from worker.worker import WorkerControlSession, load_or_create_config as load_worker_config, start_heartbeat_loop
 
 
 def test_extract_complete_messages_handles_fragmentation_and_coalescence():
@@ -610,3 +611,267 @@ def test_worker_control_session_reuses_one_socket_for_successive_heartbeats():
     assert first_response["payload"]["sequence"] == 11
     assert second_response["payload"]["sequence"] == 12
     assert session.sock is client_sock
+
+
+def test_master_registry_expired_expectation_counts_once_per_period():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
+
+    worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
+    assert worker["heartbeat_misses"] == 1
+    assert worker["expected_heartbeat_request_id"] == "req-2"
+    assert worker["expected_heartbeat_sequence"] == 2
+
+
+def test_master_registry_heartbeat_ack_valid_resets_failure_counter():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-1", 1, "alive") is True
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 0
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
+
+
+def test_master_registry_one_or_two_lost_heartbeats_do_not_mark_unavailable():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 1, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 3, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
+
+
+def test_master_registry_three_consecutive_lost_heartbeats_marks_worker_unavailable():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    for sequence, request_id in ((1, "req-1"), (2, "req-2"), (3, "req-3")):
+        registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
+        assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive") is False
+
+    worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
+    assert worker["status"] == "unavailable"
+    assert worker["heartbeat_misses"] == 3
+
+
+def test_master_registry_rejects_heartbeat_ack_with_wrong_request_id_or_sequence():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected", 7)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other", 7, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 1
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected-2", 8)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-expected-2", 9, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
+
+
+def test_master_stays_operational_after_worker_is_marked_unavailable():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+    registry.upsert_worker({
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "worker-b",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    })
+
+    for sequence, request_id in ((1, "req-1"), (2, "req-2"), (3, "req-3")):
+        registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
+        registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive")
+
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "unavailable"
+    assert registry.get_worker("22222222-2222-4222-8222-222222222222")["status"] == "available"
+    assert len(registry.workers) == 2
+
+
+def test_master_heartbeat_loop_can_be_stopped_cleanly():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+    server_sock, client_sock = socket.socketpair()
+    stop_event = threading.Event()
+    thread, stop_event = start_master_heartbeat_loop(server_sock, registry, {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }, {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }, threading.Lock(), stop_event=stop_event, interval_seconds=0.05)
+
+    stop_event.set()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    client_sock.close()
+
+
+def test_handle_client_closes_session_without_infinite_loop_when_peer_disconnects():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    server_sock, client_sock = socket.socketpair()
+
+    def tw():
+        handle_client(server_sock, None, registry, master_identity)
+
+    thread = threading.Thread(target=tw, daemon=True)
+    thread.start()
+    client_sock.close()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+
+
+def test_worker_send_on_closed_socket_does_not_raise_or_traceback(capsys):
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    server_sock.close()
+
+    message = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=42,
+    )
+
+    session.send_message(message)
+    assert session.is_closed()
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.err
+
+
+def test_worker_heartbeat_loop_stops_when_session_is_closed():
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+
+    thread = start_heartbeat_loop("127.0.0.1", 9000, config, control_session=session, interval_seconds=0.05)
+    assert thread is not None
+
+    server_sock.close()
+    for _ in range(100):
+        if session.is_closed():
+            break
+        threading.Event().wait(0.02)
+
+    thread.join(timeout=1)
+    assert session.is_closed()
+    assert not thread.is_alive()
+
+
+def test_worker_reader_marks_session_closed_on_eof():
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    server_sock.close()
+    for _ in range(100):
+        if session.is_closed():
+            break
+        threading.Event().wait(0.02)
+
+    assert session.is_closed()
+
+
+def test_worker_close_is_safe_and_idempotent():
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    session.close()
+    session.close()
+
+    assert session.is_closed()
+    assert session.sock is client_sock
+    server_sock.close()

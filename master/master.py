@@ -136,36 +136,73 @@ def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, obj
     return message
 
 
+def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, stop_event: threading.Event | None = None, interval_seconds: float = 10.0):
+    if stop_event is None:
+        stop_event = threading.Event()
+
+    sequence = 0
+
+    def loop() -> None:
+        nonlocal sequence
+        while not stop_event.is_set():
+            if stop_event.wait(interval_seconds):
+                break
+            sequence += 1
+            request_id = f"req-master-heart-{sequence}"
+            try:
+                with registry._lock:
+                    worker = registry.get_worker(worker_identity["node_id"])
+                    if worker is None:
+                        break
+                    if worker.get("expected_heartbeat_request_id") is not None and worker.get("expected_heartbeat_sequence") is not None:
+                        registry.record_heartbeat_miss(worker_identity["node_id"])
+                    registry.begin_heartbeat_expectation(worker_identity["node_id"], request_id, sequence)
+                send_heartbeat_to_worker(conn, master_identity, worker_identity, write_lock, sequence=sequence, request_id=request_id)
+                log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "sent")
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "socket_closed")
+                registry.mark_worker_unavailable(worker_identity["node_id"], reason="socket closed")
+                stop_event.set()
+                try:
+                    conn.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+                return
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    return thread, stop_event
+
+
 def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object]) -> None:
     buffer = bytearray()
     write_lock = threading.Lock()
-    heartbeat_state_lock = threading.Lock()
-    last_heartbeat_request_id = None
-    last_heartbeat_sequence = None
-
-    def maybe_send_master_heartbeat(worker_identity: Dict[str, object]) -> None:
-        nonlocal last_heartbeat_request_id, last_heartbeat_sequence
-        sequence = 0
-
-        def loop() -> None:
-            nonlocal sequence, last_heartbeat_request_id, last_heartbeat_sequence
-            while True:
-                time.sleep(10)
-                sequence += 1
-                request_id = f"req-master-heart-{sequence}"
-                message = send_heartbeat_to_worker(conn, master_identity, worker_identity, write_lock, sequence=sequence, request_id=request_id)
-                with heartbeat_state_lock:
-                    last_heartbeat_request_id = message["request_id"]
-                    last_heartbeat_sequence = message["payload"]["sequence"]
-                log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "sent")
-
-        threading.Thread(target=loop, daemon=True).start()
+    session_stop = threading.Event()
+    current_worker_identity = None
+    current_worker_thread = None
 
     try:
-        while True:
-            messages = recv_msgs(conn, buffer)
+        conn.settimeout(1.0)
+        idle_reads = 0
+        while not session_stop.is_set():
+            try:
+                messages = recv_msgs(conn, buffer)
+            except OSError:
+                break
+
             if not messages:
+                idle_reads += 1
+                if idle_reads >= 3:
+                    if current_worker_identity is not None:
+                        registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
+                    break
                 continue
+
+            idle_reads = 0
 
             for message in messages:
                 if not validate_message(message):
@@ -208,12 +245,15 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
+                    current_worker_identity = worker_record
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
                     ack = build_ack_message(message, "accepted", master_identity)
                     with write_lock:
                         send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
-                    maybe_send_master_heartbeat(worker_record)
+
+                    if current_worker_thread is None:
+                        current_worker_thread, session_stop = start_master_heartbeat_loop(conn, registry, master_identity, current_worker_identity, write_lock)
 
                 elif msg_type == "heartbeat":
                     ack = build_heartbeat_ack_message(message, source=master_identity, destination=source)
@@ -224,18 +264,50 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                 elif msg_type == "heartbeat_ack":
                     payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
                     sequence = payload.get("sequence")
-                    with heartbeat_state_lock:
-                        if request_id == last_heartbeat_request_id and sequence == last_heartbeat_sequence:
-                            log_event("ASD", source["node_label"], "master", msg_type, request_id, "received")
-                        else:
-                            log_event("ASD", source["node_label"], "master", msg_type, request_id, "correlated")
+                    status = payload.get("status")
+                    worker = registry.get_worker(source["node_id"])
+                    if worker is None:
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
+                        continue
+
+                    valid = registry.process_heartbeat_ack(source["node_id"], request_id, sequence, status)
+                    if valid:
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "received")
+                    else:
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "invalid")
+                        if worker.get("status") == "unavailable":
+                            session_stop.set()
+                            try:
+                                conn.shutdown(socket.SHUT_RDWR)
+                            except OSError:
+                                pass
+                            try:
+                                conn.close()
+                            except OSError:
+                                pass
+                            return
 
                 else:
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
     except ConnectionResetError:
-        pass
+        if current_worker_identity is not None:
+            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
+    except BrokenPipeError:
+        if current_worker_identity is not None:
+            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
+    except OSError:
+        if current_worker_identity is not None:
+            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
     finally:
-        conn.close()
+        session_stop.set()
+        try:
+            conn.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            conn.close()
+        except OSError:
+            pass
 
 
 def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None:

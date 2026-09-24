@@ -106,16 +106,33 @@ class WorkerControlSession:
         self._reader = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader.start()
 
+    def is_closed(self) -> bool:
+        return self._closed.is_set()
+
+    def _mark_closed(self) -> None:
+        if self._closed.is_set():
+            return
+        self._closed.set()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
     def _reader_loop(self) -> None:
         while not self._closed.is_set():
             try:
                 messages = recv_msgs(self.sock, self.buffer)
-            except OSError:
-                break
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+                self._mark_closed()
+                return
 
             if not messages:
-                time.sleep(0.05)
-                continue
+                self._mark_closed()
+                return
 
             for message in messages:
                 if not validate_message(message):
@@ -134,15 +151,32 @@ class WorkerControlSession:
                         "node_role": message["source"]["node_role"],
                     })
                     with self.lock:
-                        send_msg(self.sock, ack)
+                        if self._closed.is_set():
+                            return
+                        try:
+                            send_msg(self.sock, ack)
+                        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+                            self._mark_closed()
+                            return
                     log_event("ASD", message["destination"]["node_label"], message["source"]["node_label"], "heartbeat_ack", message["request_id"], "sent")
                     continue
 
                 self._queue.put(message)
 
     def send_message(self, message: dict) -> None:
+        if self._closed.is_set():
+            return
+
         with self.lock:
-            send_msg(self.sock, message)
+            if self._closed.is_set():
+                return
+            try:
+                send_msg(self.sock, message)
+            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+                self._mark_closed()
+
+    def close(self) -> None:
+        self._mark_closed()
 
     def wait_for_message(self, *, types: set[str] | None = None, request_id: str | None = None, timeout: float = 5.0) -> dict:
         deadline = time.monotonic() + timeout
@@ -270,17 +304,26 @@ def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object]
             session.close()
 
 
-def start_heartbeat_loop(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession, interval_seconds: float = 10.0) -> None:
+def start_heartbeat_loop(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession, interval_seconds: float = 10.0):
     sequence = 0
 
     def loop() -> None:
         nonlocal sequence
-        while True:
-            time.sleep(interval_seconds)
+        while not control_session.is_closed():
+            if control_session.sock is None:
+                break
+            if control_session._closed.wait(interval_seconds):
+                break
             sequence += 1
+            if control_session.is_closed():
+                break
             send_heartbeat(master_host, master_port, config, sequence, control_session=control_session)
+            if control_session.is_closed():
+                break
 
-    threading.Thread(target=loop, daemon=True).start()
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    return thread
 
 
 def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> None:

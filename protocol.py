@@ -1,5 +1,6 @@
 import json
 import socket
+import threading
 import time
 import uuid
 from typing import Any, List
@@ -202,44 +203,137 @@ class MasterRegistry:
     def __init__(self):
         self.workers = {}
         self.node_labels = {}
+        self._lock = threading.RLock()
 
     def upsert_worker(self, worker: dict) -> dict:
-        uuid_value = worker.get("node_id") or worker.get("uuid")
-        if not uuid_value:
-            raise ValueError("worker UUID is required")
+        with self._lock:
+            uuid_value = worker.get("node_id") or worker.get("uuid")
+            if not uuid_value:
+                raise ValueError("worker UUID is required")
 
-        candidate = dict(worker)
-        candidate["node_id"] = str(uuid_value)
-        candidate["node_label"] = candidate.get("node_label") or candidate.get("label")
-        candidate["group_label"] = candidate.get("group_label")
-        candidate["node_role"] = candidate.get("node_role")
+            candidate = dict(worker)
+            candidate["node_id"] = str(uuid_value)
+            candidate["node_label"] = candidate.get("node_label") or candidate.get("label")
+            candidate["group_label"] = candidate.get("group_label")
+            candidate["node_role"] = candidate.get("node_role")
+            candidate["status"] = candidate.get("status", "available")
+            candidate["heartbeat_misses"] = int(candidate.get("heartbeat_misses", 0) or 0)
+            candidate["expected_heartbeat_request_id"] = None
+            candidate["expected_heartbeat_sequence"] = None
 
-        existing = self.workers.get(candidate["node_id"])
-        if existing:
-            incompatible = (
-                existing.get("node_label") != candidate.get("node_label")
-                or existing.get("group_label") != candidate.get("group_label")
-                or existing.get("node_role") != candidate.get("node_role")
-            )
-            if incompatible:
-                raise ValueError("same node_id already exists with incompatible identity")
-            self.workers[candidate["node_id"]] = {**existing, **candidate}
+            existing = self.workers.get(candidate["node_id"])
+            if existing:
+                incompatible = (
+                    existing.get("node_label") != candidate.get("node_label")
+                    or existing.get("group_label") != candidate.get("group_label")
+                    or existing.get("node_role") != candidate.get("node_role")
+                )
+                if incompatible:
+                    raise ValueError("same node_id already exists with incompatible identity")
+                self.workers[candidate["node_id"]] = {**existing, **candidate}
+                return self.workers[candidate["node_id"]]
+
+            existing_label_owner = self.node_labels.get(candidate.get("node_label"))
+            if candidate.get("node_label") and existing_label_owner and existing_label_owner != candidate["node_id"]:
+                raise ValueError("node_label already registered for another worker")
+
+            self.workers[candidate["node_id"]] = candidate
+            if candidate.get("node_label"):
+                self.node_labels[candidate["node_label"]] = candidate["node_id"]
             return self.workers[candidate["node_id"]]
 
-        existing_label_owner = self.node_labels.get(candidate.get("node_label"))
-        if candidate.get("node_label") and existing_label_owner and existing_label_owner != candidate["node_id"]:
-            raise ValueError("node_label already registered for another worker")
+    def mark_worker_unavailable(self, node_id: str, reason: str = "heartbeat timeout") -> dict | None:
+        with self._lock:
+            worker = self.workers.get(node_id)
+            if worker is None:
+                return None
+            worker["status"] = "unavailable"
+            worker["heartbeat_misses"] = max(int(worker.get("heartbeat_misses", 0) or 0), 3)
+            worker["expected_heartbeat_request_id"] = None
+            worker["expected_heartbeat_sequence"] = None
+            log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat", reason, "unavailable")
+            return worker
 
-        self.workers[candidate["node_id"]] = candidate
-        if candidate.get("node_label"):
-            self.node_labels[candidate["node_label"]] = candidate["node_id"]
-        return self.workers[candidate["node_id"]]
+    def record_heartbeat_miss(self, node_id: str) -> bool:
+        with self._lock:
+            worker = self.workers.get(node_id)
+            if worker is None:
+                return False
+            if worker.get("status") == "unavailable":
+                return False
+
+            worker["heartbeat_misses"] = int(worker.get("heartbeat_misses", 0) or 0) + 1
+            if worker["heartbeat_misses"] >= 3:
+                worker["status"] = "unavailable"
+                worker["expected_heartbeat_request_id"] = None
+                worker["expected_heartbeat_sequence"] = None
+                log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat", "timeout", "unavailable")
+                return True
+            return False
+
+    def begin_heartbeat_expectation(self, node_id: str, request_id: str, sequence: int) -> dict:
+        with self._lock:
+            worker = self.workers.get(node_id)
+            if worker is None:
+                raise ValueError(f"unknown worker: {node_id}")
+
+            if worker.get("expected_heartbeat_request_id") is not None and worker.get("expected_heartbeat_sequence") is not None:
+                worker["heartbeat_misses"] = int(worker.get("heartbeat_misses", 0) or 0) + 1
+                if worker["heartbeat_misses"] >= 3:
+                    worker["status"] = "unavailable"
+                    worker["expected_heartbeat_request_id"] = None
+                    worker["expected_heartbeat_sequence"] = None
+                    log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat", request_id, "unavailable")
+                else:
+                    worker["expected_heartbeat_request_id"] = None
+                    worker["expected_heartbeat_sequence"] = None
+
+            worker["status"] = "available" if worker.get("status") != "unavailable" else "unavailable"
+            worker["expected_heartbeat_request_id"] = str(request_id)
+            worker["expected_heartbeat_sequence"] = int(sequence)
+            return worker
+
+    def process_heartbeat_ack(self, node_id: str, request_id: str, sequence: int, status: str) -> bool:
+        with self._lock:
+            worker = self.workers.get(node_id)
+            if worker is None:
+                return False
+
+            expected_id = worker.get("expected_heartbeat_request_id")
+            expected_sequence = worker.get("expected_heartbeat_sequence")
+            valid = (
+                expected_id is not None
+                and expected_sequence is not None
+                and request_id == expected_id
+                and int(sequence) == int(expected_sequence)
+                and str(status) == "alive"
+            )
+
+            if valid:
+                worker["heartbeat_misses"] = 0
+                worker["status"] = "available"
+                worker["expected_heartbeat_request_id"] = None
+                worker["expected_heartbeat_sequence"] = None
+                return True
+
+            if expected_id is not None and expected_sequence is not None:
+                worker["heartbeat_misses"] = int(worker.get("heartbeat_misses", 0) or 0) + 1
+                worker["expected_heartbeat_request_id"] = None
+                worker["expected_heartbeat_sequence"] = None
+                if worker["heartbeat_misses"] >= 3:
+                    worker["status"] = "unavailable"
+                    log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat_ack", request_id, "unavailable")
+                return False
+
+            return False
 
     def get_worker(self, uuid_value: str):
-        return self.workers.get(uuid_value)
+        with self._lock:
+            return self.workers.get(uuid_value)
 
     def remove_worker(self, uuid_value: str) -> None:
-        worker = self.workers.pop(uuid_value, None)
-        if worker and worker.get("node_label") in self.node_labels:
-            if self.node_labels.get(worker["node_label"]) == uuid_value:
-                del self.node_labels[worker["node_label"]]
+        with self._lock:
+            worker = self.workers.pop(uuid_value, None)
+            if worker and worker.get("node_label") in self.node_labels:
+                if self.node_labels.get(worker["node_label"]) == uuid_value:
+                    del self.node_labels[worker["node_label"]]
