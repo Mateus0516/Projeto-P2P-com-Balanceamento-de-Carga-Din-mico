@@ -1,6 +1,10 @@
 {
-  "uuid": "2b3d7de0-c230-44d5-93c7-708903408906",
-  "label": "worker-a",
+  "group_label": "p2p-cluster",
+  "node_id": "84bde5b5-2f7f-4cb3-8101-ebe16922618c",
+  "node_label": "worker-a",
+  "node_role": "worker",
   "host": "127.0.0.1",
-  "port": 9101
+  "port": 9101,
+  "uuid": "84bde5b5-2f7f-4cb3-8101-ebe16922618c",
+  "label": "worker-a"
 }

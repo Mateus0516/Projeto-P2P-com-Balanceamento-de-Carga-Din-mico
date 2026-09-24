@@ -1,6 +1,10 @@
 {
-  "uuid": "master-uuid",
-  "label": "master",
+  "group_label": "p2p-cluster",
+  "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+  "node_label": "master",
+  "node_role": "master",
   "host": "127.0.0.1",
-  "port": 9000
+  "port": 9000,
+  "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+  "label": "master"
 }

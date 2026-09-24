@@ -1,6 +1,9 @@
 import json
+import uuid
 
+from master.master import load_or_create_config as load_master_config
 from protocol import MasterRegistry, extract_complete_messages, validate_message
+from worker.worker import load_or_create_config as load_worker_config
 
 
 def test_extract_complete_messages_handles_fragmentation_and_coalescence():
@@ -91,3 +94,26 @@ def test_master_registry_updates_existing_uuid():
 
     assert len(registry.workers) == 1
     assert registry.workers["u-9"]["port"] == 9002
+
+
+def test_config_identity_is_persistent_and_v4_for_master_and_worker(tmp_path):
+    master_path = tmp_path / "master-config.json"
+    worker_path = tmp_path / "worker-config.json"
+
+    master_config = load_master_config(master_path)
+    worker_config = load_worker_config(worker_path)
+
+    for config, expected_role in ((master_config, "master"), (worker_config, "worker")):
+        assert config["group_label"]
+        assert config["node_role"] == expected_role
+        assert config["node_label"]
+        assert config["host"]
+        assert isinstance(config["port"], int)
+        assert config["node_id"]
+        parsed = uuid.UUID(config["node_id"])
+        assert parsed.version == 4
+
+    master_again = load_master_config(master_path)
+    worker_again = load_worker_config(worker_path)
+    assert master_again["node_id"] == master_config["node_id"]
+    assert worker_again["node_id"] == worker_config["node_id"]

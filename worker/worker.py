@@ -18,41 +18,65 @@ from protocol import log_event, recv_msgs, send_msg, validate_message
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
+def _ensure_v4_uuid(value: object) -> str:
+    try:
+        candidate = uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return str(uuid.uuid4())
+
+    return str(candidate) if candidate.version == 4 else str(uuid.uuid4())
+
+
+def _normalize_identity(config: Dict[str, object], role: str, default_label: str, default_host: str, default_port: int) -> Dict[str, object]:
+    normalized = dict(config)
+    normalized["group_label"] = str(normalized.get("group_label") or "p2p-cluster")
+    normalized["node_role"] = str(normalized.get("node_role") or role)
+    normalized["node_label"] = str(normalized.get("node_label") or normalized.get("label") or default_label)
+    normalized["node_id"] = _ensure_v4_uuid(normalized.get("node_id") or normalized.get("uuid"))
+    normalized["host"] = str(normalized.get("host") or default_host)
+    normalized["port"] = int(normalized.get("port", default_port))
+
+    normalized["uuid"] = normalized["node_id"]
+    normalized["label"] = normalized["node_label"]
+    return normalized
+
+
 def load_or_create_config(path: Path) -> Dict[str, object]:
     if not path.exists():
-        config = {
-            "uuid": str(uuid.uuid4()),
-            "label": "worker-a",
-            "host": "127.0.0.1",
-            "port": 9101,
-        }
+        config = _normalize_identity(
+            {"group_label": "p2p-cluster", "node_role": "worker", "node_label": "worker-a", "host": "127.0.0.1", "port": 9101},
+            role="worker",
+            default_label="worker-a",
+            default_host="127.0.0.1",
+            default_port=9101,
+        )
         path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         return config
 
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
 
-    if "uuid" not in data:
-        data["uuid"] = str(uuid.uuid4())
-    if "label" not in data:
-        data["label"] = "worker-a"
-    if "host" not in data:
-        data["host"] = "127.0.0.1"
-    if "port" not in data:
-        data["port"] = 9101
-
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    return data
+    normalized = _normalize_identity(
+        data,
+        role="worker",
+        default_label="worker-a",
+        default_host="127.0.0.1",
+        default_port=9101,
+    )
+    path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
+    return normalized
 
 
 def register_worker(master_host: str, master_port: int, config: Dict[str, object]) -> None:
+    node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
+    node_label = str(config.get("node_label", config.get("label", "worker-a")))
     message = {
         "type": "register_worker",
         "msg_id": f"register-{uuid.uuid4()}",
         "request_id": f"req-{uuid.uuid4()}",
         "origin": {
-            "uuid": config["uuid"],
-            "label": config["label"],
+            "uuid": node_id,
+            "label": node_label,
         },
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "payload": {
@@ -123,7 +147,8 @@ if __name__ == "__main__":
     config["host"] = args.host
     config["port"] = args.port
 
-    listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], config["label"]), daemon=True)
+    node_label = str(config.get("node_label", config.get("label", "worker-a")))
+    listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], node_label), daemon=True)
     listener_thread.start()
 
     register_worker(args.master_host, args.master_port, config)
