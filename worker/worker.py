@@ -377,6 +377,21 @@ def open_control_session(master_host: str, master_port: int, timeout: float = 5.
     return WorkerControlSession(sock)
 
 
+def send_with_retry(session: WorkerControlSession, message: dict, *, expect_type: str, timeout: float = 5.0, max_attempts: int = 3):
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        session.send_message(message)
+        try:
+            return session.wait_for_message(types={expect_type}, request_id=message["request_id"], timeout=timeout)
+        except TimeoutError as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                raise
+    if last_error is not None:
+        raise last_error
+    raise TimeoutError(f"No matching message received for {message['request_id']}")
+
+
 def register_worker(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession | None = None, stop_event: threading.Event | None = None) -> bool:
     node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
@@ -422,11 +437,8 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
 
     session = control_session or open_control_session(master_host, master_port)
     try:
-        session.send_message(message)
-        log_event("ASD", node_label, "master", message["type"], message["request_id"], "sent")
-
         try:
-            reply = session.wait_for_message(types={"registration_ack"}, request_id=message["request_id"], timeout=5, stop_event=stop_event)
+            reply = send_with_retry(session, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
         except TimeoutError:
             log_event("ASD", node_label, "master", "registration_ack", message["request_id"], "timeout")
             return False
@@ -464,11 +476,9 @@ def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object]
 
     session = control_session or open_control_session(master_host, master_port)
     try:
-        session.send_message(message)
         log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat", message["request_id"], "sent")
-
         try:
-            reply = session.wait_for_message(types={"heartbeat_ack"}, request_id=message["request_id"], timeout=5)
+            reply = send_with_retry(session, message, expect_type="heartbeat_ack", timeout=5.0, max_attempts=3)
         except TimeoutError:
             log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat_ack", message["request_id"], "timeout")
             return

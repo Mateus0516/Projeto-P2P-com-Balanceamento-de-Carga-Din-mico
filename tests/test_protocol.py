@@ -22,6 +22,7 @@ from protocol import (
     send_msg,
     validate_message,
 )
+import worker.worker as worker_module
 from worker.worker import (
     WorkerControlSession,
     WorkerSessionManager,
@@ -30,6 +31,8 @@ from worker.worker import (
     open_control_session,
     register_worker,
     run_worker,
+    send_heartbeat,
+    send_with_retry,
     start_heartbeat_loop,
 )
 
@@ -1190,6 +1193,175 @@ def test_handle_client_closes_session_without_infinite_loop_when_peer_disconnect
     thread.join(timeout=1)
 
     assert not thread.is_alive()
+
+
+class FakeReplySession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.sent_messages = []
+        self.timeouts = []
+
+    def send_message(self, message):
+        self.sent_messages.append(message)
+
+    def wait_for_message(self, *, types=None, request_id=None, timeout=5.0, stop_event=None):
+        self.timeouts.append(timeout)
+        if not self.responses:
+            raise TimeoutError("no matching reply")
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+def test_send_with_retry_success_on_first_attempt():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-try-1",
+        "request_id": "req-try-1",
+        "timestamp_ms": 1727170000123,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"home_master": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
+    }
+    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"status": "accepted"}}
+    fake = FakeReplySession([ack])
+
+    result = send_with_retry(fake, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
+
+    assert result is ack
+    assert len(fake.sent_messages) == 1
+    assert fake.sent_messages[0] is message
+    assert fake.timeouts == [5.0]
+
+
+def test_send_with_retry_retries_once_then_succeeds():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "msg-heart-1",
+        "request_id": "req-heart-1",
+        "timestamp_ms": 1727170000124,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"sequence": 1},
+    }
+    ack = {"type": "heartbeat_ack", "request_id": message["request_id"], "payload": {"sequence": 1, "status": "alive"}}
+    fake = FakeReplySession([TimeoutError("timed out"), ack])
+
+    result = send_with_retry(fake, message, expect_type="heartbeat_ack", timeout=5.0, max_attempts=3)
+
+    assert result is ack
+    assert len(fake.sent_messages) == 2
+    assert fake.sent_messages[0] is message
+    assert fake.sent_messages[1] is message
+    assert fake.timeouts == [5.0, 5.0]
+
+
+def test_send_with_retry_fails_after_three_total_attempts():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-try-3",
+        "request_id": "req-try-3",
+        "timestamp_ms": 1727170000125,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"home_master": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
+    }
+    fake = FakeReplySession([TimeoutError("timed out"), TimeoutError("timed out"), TimeoutError("timed out")])
+
+    with pytest.raises(TimeoutError):
+        send_with_retry(fake, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
+
+    assert len(fake.sent_messages) == 3
+    assert fake.sent_messages[0] is message
+    assert fake.sent_messages[1] is message
+    assert fake.sent_messages[2] is message
+    assert fake.timeouts == [5.0, 5.0, 5.0]
+
+
+def test_send_with_retry_preserves_same_message_logical_content_across_attempts():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-preserve-1",
+        "request_id": "req-preserve-1",
+        "timestamp_ms": 1727170000126,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"home_master": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
+    }
+    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"status": "accepted"}}
+    fake = FakeReplySession([TimeoutError("timed out"), TimeoutError("timed out"), ack])
+
+    result = send_with_retry(fake, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
+
+    assert result is ack
+    assert len(fake.sent_messages) == 3
+    for sent in fake.sent_messages:
+        assert sent["message_id"] == message["message_id"]
+        assert sent["request_id"] == message["request_id"]
+        assert sent["type"] == message["type"]
+        assert sent["source"] == message["source"]
+        assert sent["destination"] == message["destination"]
+        assert sent["payload"] == message["payload"]
+        assert sent["timestamp_ms"] == message["timestamp_ms"]
+    assert fake.sent_messages[0] is fake.sent_messages[1] is fake.sent_messages[2]
+
+
+def test_send_with_retry_uses_five_second_timeout():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "msg-heart-timeout",
+        "request_id": "req-heart-timeout",
+        "timestamp_ms": 1727170000127,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"sequence": 7},
+    }
+    ack = {"type": "heartbeat_ack", "request_id": message["request_id"], "payload": {"sequence": 7, "status": "alive"}}
+    fake = FakeReplySession([TimeoutError("timed out"), ack])
+
+    result = send_with_retry(fake, message, expect_type="heartbeat_ack", timeout=5.0, max_attempts=3)
+
+    assert result is ack
+    assert fake.timeouts == [5.0, 5.0]
+
+
+def test_send_heartbeat_uses_send_with_retry(monkeypatch):
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "worker-f",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9106,
+    }
+    call_log = {}
+    ack = {"type": "heartbeat_ack", "request_id": "req-heart-send-with-retry", "payload": {"sequence": 7, "status": "alive"}}
+
+    def fake_send_with_retry(session, message, *, expect_type, timeout, max_attempts):
+        call_log["message"] = message
+        call_log["expect_type"] = expect_type
+        call_log["timeout"] = timeout
+        call_log["max_attempts"] = max_attempts
+        call_log["session"] = session
+        return ack
+
+    monkeypatch.setattr(worker_module, "send_with_retry", fake_send_with_retry)
+    session = FakeReplySession([])
+
+    send_heartbeat("127.0.0.1", 9000, config, 7, control_session=session)
+
+    assert call_log["session"] is session
+    assert call_log["expect_type"] == "heartbeat_ack"
+    assert call_log["timeout"] == 5.0
+    assert call_log["max_attempts"] == 3
+    assert call_log["message"]["type"] == "heartbeat"
+    assert call_log["message"]["request_id"] == session.sent_messages[0]["request_id"] if session.sent_messages else call_log["message"]["request_id"]
 
 
 def test_worker_compute_retry_delay_grows_and_caps_at_five_seconds():
