@@ -26,6 +26,24 @@ from protocol import (
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
 
+def _default_label_from_path(path: Path) -> str:
+    stem = (path.stem or "worker-a").strip().replace("_", "-")
+    if not stem:
+        return "worker-a"
+    if stem == "worker":
+        return "worker-a"
+    return stem
+
+
+def _default_port_for_label(label: str, default_port: int = 9101) -> int:
+    normalized = str(label).lower().replace("_", "-")
+    if normalized.endswith("-b"):
+        return 9102
+    if normalized.endswith("-a"):
+        return 9101
+    return int(default_port)
+
+
 def _ensure_v4_uuid(value: object) -> str:
     try:
         candidate = uuid.UUID(str(value))
@@ -50,28 +68,33 @@ def _normalize_identity(config: Dict[str, object], role: str, default_label: str
 
 
 def load_or_create_config(path: Path) -> Dict[str, object]:
-    if not path.exists():
+    config_path = path if path.is_absolute() else (Path.cwd() / path).resolve()
+    inferred_label = _default_label_from_path(config_path)
+    inferred_port = _default_port_for_label(inferred_label, default_port=9101)
+
+    if not config_path.exists():
         config = _normalize_identity(
-            {"group_label": "p2p-cluster", "node_role": "worker", "node_label": "worker-a", "host": "127.0.0.1", "port": 9101},
+            {"group_label": "p2p-cluster", "node_role": "worker", "node_label": inferred_label, "host": "127.0.0.1", "port": inferred_port},
             role="worker",
-            default_label="worker-a",
+            default_label=inferred_label,
             default_host="127.0.0.1",
-            default_port=9101,
+            default_port=inferred_port,
         )
-        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         return config
 
-    with path.open("r", encoding="utf-8") as handle:
+    with config_path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
 
     normalized = _normalize_identity(
         data,
         role="worker",
-        default_label="worker-a",
+        default_label=inferred_label,
         default_host="127.0.0.1",
-        default_port=9101,
+        default_port=inferred_port,
     )
-    path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
+    config_path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
     return normalized
 
 
@@ -476,15 +499,18 @@ def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> No
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Worker node for NDJSON registration protocol")
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9101)
     parser.add_argument("--master-host", default="127.0.0.1")
     parser.add_argument("--master-port", type=int, default=9000)
     args = parser.parse_args()
 
-    config = load_or_create_config(CONFIG_PATH)
+    config_path = args.config if args.config.is_absolute() else (Path.cwd() / args.config).resolve()
+    config = load_or_create_config(config_path)
     config["host"] = args.host
-    config["port"] = args.port
+    if args.port != 9101 or config.get("node_label") == "worker-b":
+        config["port"] = args.port
 
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     worker_identity = {

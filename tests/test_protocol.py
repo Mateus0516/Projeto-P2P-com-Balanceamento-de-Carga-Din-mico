@@ -3,6 +3,7 @@ import socket
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from master.master import (
     build_ack_message,
@@ -29,6 +30,55 @@ from worker.worker import (
     run_worker,
     start_heartbeat_loop,
 )
+
+
+def test_worker_load_or_create_config_keeps_distinct_persistent_identities(tmp_path):
+    a_path = tmp_path / "worker-a.json"
+    b_path = tmp_path / "worker-b.json"
+
+    worker_a = load_worker_config(a_path)
+    worker_b = load_worker_config(b_path)
+
+    assert worker_a["node_label"] == "worker-a"
+    assert worker_b["node_label"] == "worker-b"
+    assert worker_a["node_id"] != worker_b["node_id"]
+    assert uuid.UUID(worker_a["node_id"]).version == 4
+    assert uuid.UUID(worker_b["node_id"]).version == 4
+
+
+def test_master_registry_tracks_two_workers_separately_and_keeps_same_identity_after_reconnect():
+    registry = MasterRegistry()
+    worker_a = {
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    worker_b = {
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "worker-b",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    }
+
+    registry.upsert_worker(worker_a)
+    registry.upsert_worker(worker_b)
+
+    assert len(registry.workers) == 2
+    assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
+    assert set(registry.node_labels) == {"worker-a", "worker-b"}
+
+    registry.mark_worker_unavailable(worker_a["node_id"], reason="socket closed")
+    assert registry.get_worker(worker_a["node_id"])["status"] == "unavailable"
+    assert registry.get_worker(worker_b["node_id"])["status"] == "available"
+
+    registry.upsert_worker(worker_a)
+    assert len(registry.workers) == 2
+    assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
 
 
 def test_extract_complete_messages_handles_fragmentation_and_coalescence():
