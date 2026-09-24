@@ -6,5 +6,15 @@
   "host": "127.0.0.1",
   "port": 9101,
   "uuid": "84bde5b5-2f7f-4cb3-8101-ebe16922618c",
-  "label": "worker-a"
+  "label": "worker-a",
+  "master": {
+    "group_label": "p2p-cluster",
+    "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "node_label": "master",
+    "node_role": "master",
+    "host": "127.0.0.1",
+    "port": 9000,
+    "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "label": "master"
+  }
 }

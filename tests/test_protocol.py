@@ -555,6 +555,36 @@ def test_master_registry_is_idempotent_for_same_node_id_and_rejects_conflicts():
         raise AssertionError("same node_id with incompatible identity should be rejected")
 
 
+def test_worker_config_embeds_master_identity_without_repo_dependency(tmp_path):
+    a_path = tmp_path / "worker-a.json"
+    b_path = tmp_path / "worker-b.json"
+
+    worker_a = load_worker_config(a_path)
+    worker_b = load_worker_config(b_path)
+
+    assert worker_a["node_label"] == "worker-a"
+    assert worker_b["node_label"] == "worker-b"
+    assert worker_a["node_id"] != worker_b["node_id"]
+
+    assert worker_a["master"]["node_role"] == "master"
+    assert worker_a["master"]["node_label"] == "master"
+    assert worker_a["master"]["host"] == "127.0.0.1"
+    assert worker_a["master"]["port"] == 9000
+    assert uuid.UUID(worker_a["master"]["node_id"]).version == 4
+    assert worker_a["master"] == worker_b["master"]
+
+
+def test_worker_config_persists_master_metadata_between_reloads(tmp_path):
+    config_path = tmp_path / "worker-a.json"
+
+    first = load_worker_config(config_path)
+    second = load_worker_config(config_path)
+
+    assert first["node_id"] == second["node_id"]
+    assert first["master"] == second["master"]
+    assert first["master"]["port"] == 9000
+
+
 def test_config_identity_is_persistent_and_v4_for_master_and_worker(tmp_path):
     master_path = tmp_path / "master-config.json"
     worker_path = tmp_path / "worker-config.json"

@@ -24,6 +24,14 @@ from protocol import (
 )
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
+DEFAULT_MASTER_IDENTITY = {
+    "group_label": "p2p-cluster",
+    "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "node_label": "master",
+    "node_role": "master",
+    "host": "127.0.0.1",
+    "port": 9000,
+}
 
 
 def _default_label_from_path(path: Path) -> str:
@@ -67,6 +75,21 @@ def _normalize_identity(config: Dict[str, object], role: str, default_label: str
     return normalized
 
 
+def _normalize_master_identity(config: Dict[str, object] | None, default_host: str = "127.0.0.1", default_port: int = 9000) -> Dict[str, object]:
+    source = dict((config or {}).get("master") or {}) if isinstance(config, dict) else {}
+    normalized = {
+        "group_label": str(source.get("group_label") or DEFAULT_MASTER_IDENTITY["group_label"]),
+        "node_id": _ensure_v4_uuid(source.get("node_id") or source.get("uuid") or DEFAULT_MASTER_IDENTITY["node_id"]),
+        "node_label": str(source.get("node_label") or source.get("label") or DEFAULT_MASTER_IDENTITY["node_label"]),
+        "node_role": str(source.get("node_role") or DEFAULT_MASTER_IDENTITY["node_role"]),
+        "host": str(source.get("host") or default_host),
+        "port": int(source.get("port", default_port)),
+    }
+    normalized["uuid"] = normalized["node_id"]
+    normalized["label"] = normalized["node_label"]
+    return normalized
+
+
 def load_or_create_config(path: Path) -> Dict[str, object]:
     config_path = path if path.is_absolute() else (Path.cwd() / path).resolve()
     inferred_label = _default_label_from_path(config_path)
@@ -80,6 +103,7 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
             default_host="127.0.0.1",
             default_port=inferred_port,
         )
+        config["master"] = _normalize_master_identity({"master": {}}, default_host="127.0.0.1", default_port=9000)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         return config
@@ -94,29 +118,15 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
         default_host="127.0.0.1",
         default_port=inferred_port,
     )
+    normalized["master"] = _normalize_master_identity({"master": data.get("master")}, default_host="127.0.0.1", default_port=9000)
     config_path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
     return normalized
 
 
-def load_master_identity() -> Dict[str, object]:
-    master_config_path = Path(__file__).resolve().parent.parent / "master" / "config.json"
-    if not master_config_path.exists():
-        return {
-            "group_label": "p2p-cluster",
-            "node_id": "00000000-0000-4000-8000-000000000000",
-            "node_label": "master",
-            "node_role": "master",
-        }
-
-    with master_config_path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-
-    return {
-        "group_label": str(data.get("group_label", "p2p-cluster")),
-        "node_id": str(data.get("node_id", "00000000-0000-4000-8000-000000000000")),
-        "node_label": str(data.get("node_label", "master")),
-        "node_role": str(data.get("node_role", "master")),
-    }
+def load_master_identity(config: Dict[str, object] | None = None) -> Dict[str, object]:
+    if config is None:
+        config = {}
+    return _normalize_master_identity(config, default_host="127.0.0.1", default_port=9000)
 
 
 class WorkerControlSession:
@@ -342,7 +352,7 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
     node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     node_role = str(config.get("node_role", "worker"))
-    master_identity = load_master_identity()
+    master_identity = load_master_identity(config)
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
@@ -392,7 +402,7 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
 
 
 def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object], sequence: int, control_session: WorkerControlSession | None = None) -> None:
-    master_identity = load_master_identity()
+    master_identity = load_master_identity(config)
     message = build_heartbeat_message(
         source={
             "group_label": str(config.get("group_label", "p2p-cluster")),
@@ -511,6 +521,7 @@ if __name__ == "__main__":
     config["host"] = args.host
     if args.port != 9101 or config.get("node_label") == "worker-b":
         config["port"] = args.port
+    config["master"] = _normalize_master_identity({"master": config.get("master")}, default_host=args.master_host, default_port=args.master_port)
 
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     worker_identity = {
