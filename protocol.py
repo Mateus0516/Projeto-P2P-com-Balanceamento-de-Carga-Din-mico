@@ -320,7 +320,29 @@ class MasterRegistry:
     def __init__(self):
         self.workers = {}
         self.node_labels = {}
+        self.processed_message_keys = {}
         self._lock = threading.RLock()
+
+    def remember_processed_message(self, message: dict, response: dict) -> dict:
+        with self._lock:
+            if not isinstance(message, dict):
+                return response
+            source = message.get("source")
+            if not isinstance(source, dict):
+                return response
+            key = (str(source.get("node_id", "")), str(message.get("request_id", "")), str(message.get("type", "")))
+            self.processed_message_keys[key] = response
+            return response
+
+    def get_processed_response(self, message: dict) -> dict | None:
+        with self._lock:
+            if not isinstance(message, dict):
+                return None
+            source = message.get("source")
+            if not isinstance(source, dict):
+                return None
+            key = (str(source.get("node_id", "")), str(message.get("request_id", "")), str(message.get("type", "")))
+            return self.processed_message_keys.get(key)
 
     def upsert_worker(self, worker: dict) -> dict:
         with self._lock:

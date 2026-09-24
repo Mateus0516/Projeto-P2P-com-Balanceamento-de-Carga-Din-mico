@@ -1364,6 +1364,98 @@ def test_send_heartbeat_uses_send_with_retry(monkeypatch):
     assert call_log["message"]["request_id"] == session.sent_messages[0]["request_id"] if session.sent_messages else call_log["message"]["request_id"]
 
 
+def test_master_registry_deduplicates_by_source_request_id_and_type():
+    registry = MasterRegistry()
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "msg-dup-1",
+        "request_id": "req-dup-1",
+        "timestamp_ms": 1727170000123,
+        "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
+        "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
+        "payload": {"sequence": 1},
+    }
+    response = {"type": "heartbeat_ack", "request_id": "req-dup-1", "payload": {"status": "alive"}}
+
+    registry.remember_processed_message(message, response)
+    assert registry.get_processed_response(message) is response
+    assert registry.get_processed_response({**message, "request_id": "req-dup-2"}) is None
+    assert registry.get_processed_response({**message, "source": {**message["source"], "node_id": "22222222-2222-4222-8222-222222222222"}}) is None
+    assert registry.get_processed_response({**message, "type": "register_worker"}) is None
+
+
+def test_handle_client_deduplicates_retransmitted_register_worker_and_reuses_cached_ack():
+    registry = MasterRegistry()
+    master_identity = {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"}
+    source = {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"}
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-dup-register-real-1",
+        "request_id": "req-dup-register-real-1",
+        "timestamp_ms": 1727170000124,
+        "source": source,
+        "destination": {"group_label": "p2p-cluster", "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": master_identity["node_role"]},
+        "payload": {"home_master": {"group_label": master_identity["group_label"], "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+    thread.start()
+    client_sock.settimeout(2)
+
+    send_msg(client_sock, message)
+    first_reply = json.loads(client_sock.recv(4096).decode("utf-8").strip())
+    assert first_reply["type"] == "registration_ack"
+    assert first_reply["payload"]["status"] == "accepted"
+    assert len(registry.workers) == 1
+
+    send_msg(client_sock, message)
+    second_reply = json.loads(client_sock.recv(4096).decode("utf-8").strip())
+    assert second_reply["type"] == "registration_ack"
+    assert second_reply == first_reply
+    assert len(registry.workers) == 1
+
+    client_sock.close()
+    thread.join(timeout=1)
+
+
+def test_handle_client_deduplicates_retransmitted_heartbeat_and_reuses_cached_ack():
+    registry = MasterRegistry()
+    master_identity = {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"}
+    source = {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"}
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "msg-dup-heart-real-1",
+        "request_id": "req-dup-heart-real-1",
+        "timestamp_ms": 1727170000125,
+        "source": source,
+        "destination": {"group_label": "p2p-cluster", "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": master_identity["node_role"]},
+        "payload": {"sequence": 2},
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+    thread.start()
+    client_sock.settimeout(2)
+
+    send_msg(client_sock, message)
+    first_reply = json.loads(client_sock.recv(4096).decode("utf-8").strip())
+    assert first_reply["type"] == "heartbeat_ack"
+    assert first_reply["request_id"] == message["request_id"]
+
+    send_msg(client_sock, message)
+    second_reply = json.loads(client_sock.recv(4096).decode("utf-8").strip())
+    assert second_reply["type"] == "heartbeat_ack"
+    assert second_reply == first_reply
+    assert registry.get_processed_response(message) == first_reply
+
+    client_sock.close()
+    thread.join(timeout=1)
+
+
 def test_worker_compute_retry_delay_grows_and_caps_at_five_seconds():
     assert compute_retry_delay(1) == 0.5
     assert compute_retry_delay(2) == 1.0

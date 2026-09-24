@@ -222,6 +222,12 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                 msg_type = message["type"]
                 request_id = message["request_id"]
                 source = message["source"]
+                cached_response = registry.get_processed_response(message)
+                if cached_response is not None:
+                    with write_lock:
+                        send_msg(conn, cached_response)
+                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "deduplicated")
+                    continue
 
                 if msg_type == "register_worker":
                     payload = message.get("payload", {})
@@ -280,6 +286,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     current_worker_identity = worker_record
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
                     ack = build_ack_message(message, "accepted", master_identity)
+                    registry.remember_processed_message(message, ack)
                     with write_lock:
                         send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
@@ -289,6 +296,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                 elif msg_type == "heartbeat":
                     ack = build_heartbeat_ack_message(message, source=master_identity, destination=source)
+                    registry.remember_processed_message(message, ack)
                     with write_lock:
                         send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], "heartbeat_ack", request_id, "sent")
