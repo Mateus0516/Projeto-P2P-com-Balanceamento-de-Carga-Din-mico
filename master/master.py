@@ -67,7 +67,7 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
     return normalized
 
 
-def build_ack_message(request_message: dict, status: str, master_identity: Dict[str, object]) -> dict:
+def build_ack_message(request_message: dict, status: str, master_identity: Dict[str, object], reason: str | None = None) -> dict:
     source = request_message["source"]
     payload = request_message.get("payload", {}) if isinstance(request_message.get("payload", {}), dict) else {}
     worker_identity = {
@@ -76,6 +76,14 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
         "node_label": source["node_label"],
         "node_role": source["node_role"],
     }
+    ack_payload = {
+        "status": status,
+        "worker": worker_identity,
+        "host": payload.get("host"),
+        "port": payload.get("port"),
+    }
+    if reason is not None:
+        ack_payload["reason"] = reason
     return {
         "version": "sd_2026_2_v1",
         "type": "registration_ack",
@@ -94,12 +102,7 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
             "node_label": source["node_label"],
             "node_role": source["node_role"],
         },
-        "payload": {
-            "status": status,
-            "worker": worker_identity,
-            "host": payload.get("host"),
-            "port": payload.get("port"),
-        },
+        "payload": ack_payload,
     }
 
 
@@ -124,17 +127,32 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     payload = message.get("payload", {})
                     if not isinstance(payload, dict):
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "discarded")
+                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason="invalid payload"))
+                        continue
+
+                    if source.get("group_label") != master_identity.get("group_label"):
+                        reason = "group_label mismatch"
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
                     worker_record = {
-                        "uuid": source["node_id"],
-                        "label": source["node_label"],
+                        "node_id": source["node_id"],
+                        "node_label": source["node_label"],
+                        "group_label": source["group_label"],
+                        "node_role": source["node_role"],
                         "host": payload.get("host", "127.0.0.1"),
                         "port": payload.get("port", 0),
                     }
-                    registry.upsert_worker(worker_record)
-                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
+                    try:
+                        registry.upsert_worker(worker_record)
+                    except ValueError as exc:
+                        reason = str(exc)
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
+                        continue
 
+                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
                     ack = build_ack_message(message, "accepted", master_identity)
                     send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")

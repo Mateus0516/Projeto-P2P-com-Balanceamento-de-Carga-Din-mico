@@ -135,7 +135,13 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
                     continue
 
                 if reply["type"] == "registration_ack":
-                    log_event("ASD", config["label"], "master", reply["type"], reply["request_id"], "accepted")
+                    status = reply.get("payload", {}).get("status", "unknown")
+                    reason = reply.get("payload", {}).get("reason")
+                    if status == "accepted":
+                        log_event("ASD", config["label"], "master", reply["type"], reply["request_id"], "accepted")
+                        return
+
+                    log_event("ASD", config["label"], "master", reply["type"], reply["request_id"], f"rejected:{reason or 'unknown'}")
                     return
 
         log_event("ASD", config["label"], "master", "registration_ack", message["request_id"], "timeout")

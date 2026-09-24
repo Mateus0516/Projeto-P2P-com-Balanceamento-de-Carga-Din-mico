@@ -1,8 +1,10 @@
 import json
+import socket
+import threading
 import uuid
 
-from master.master import build_ack_message, load_or_create_config as load_master_config
-from protocol import MasterRegistry, extract_complete_messages, validate_message
+from master.master import build_ack_message, handle_client, load_or_create_config as load_master_config
+from protocol import MasterRegistry, extract_complete_messages, send_msg, validate_message
 from worker.worker import load_or_create_config as load_worker_config
 
 
@@ -218,6 +220,61 @@ def test_master_registry_updates_existing_uuid():
     assert registry.workers["u-9"]["port"] == 9002
 
 
+def test_master_registry_is_idempotent_for_same_node_id_and_rejects_conflicts():
+    registry = MasterRegistry()
+    first = {
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    second = {
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    }
+    duplicate_label = {
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9103,
+    }
+    incompatible_same_id = {
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-b",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9104,
+    }
+
+    registry.upsert_worker(first)
+    registry.upsert_worker(second)
+    assert len(registry.workers) == 1
+    assert registry.workers["11111111-1111-4111-8111-111111111111"]["port"] == 9102
+
+    try:
+        registry.upsert_worker(duplicate_label)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("duplicate node_label should be rejected")
+
+    try:
+        registry.upsert_worker(incompatible_same_id)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("same node_id with incompatible identity should be rejected")
+
+
 def test_config_identity_is_persistent_and_v4_for_master_and_worker(tmp_path):
     master_path = tmp_path / "master-config.json"
     worker_path = tmp_path / "worker-config.json"
@@ -268,6 +325,81 @@ def test_validate_message_accepts_sd_2026_2_v1_envelope():
     assert validate_message(message) is True
 
 
+def test_register_worker_rejects_group_label_mismatch_and_master_stays_operational():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    def register_once(message):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        send_msg(client_sock, message)
+        try:
+            raw = client_sock.recv(4096)
+        finally:
+            client_sock.close()
+        payload = json.loads(raw.decode("utf-8").strip())
+        return payload
+
+    rejected_request = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-reject-1",
+        "request_id": "req-reject-1",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "other-group",
+            "node_id": "33333333-3333-4333-8333-333333333333",
+            "node_label": "worker-bad",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9105},
+    }
+
+    rejected_reply = register_once(rejected_request)
+    assert rejected_reply["payload"]["status"] == "rejected"
+    assert "group_label" in str(rejected_reply["payload"]["reason"]).lower()
+    assert len(registry.workers) == 0
+
+    accepted_request = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-accept-1",
+        "request_id": "req-accept-1",
+        "timestamp_ms": 1727170000456,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "44444444-4444-4444-8444-444444444444",
+            "node_label": "worker-good",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9106},
+    }
+
+    accepted_reply = register_once(accepted_request)
+    assert accepted_reply["payload"]["status"] == "accepted"
+    assert len(registry.workers) == 1
+    assert registry.workers["44444444-4444-4444-8444-444444444444"]["node_label"] == "worker-good"
+
+
 def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     request = {
         "version": "sd_2026_2_v1",
@@ -297,6 +429,7 @@ def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     }
 
     ack = build_ack_message(request, "accepted", master_identity)
+    rejected = build_ack_message(request, "rejected", master_identity, reason="duplicate node_label")
 
     assert ack["version"] == "sd_2026_2_v1"
     assert ack["request_id"] == request["request_id"]
@@ -304,3 +437,6 @@ def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     assert ack["source"]["node_role"] == "master"
     assert ack["destination"]["node_role"] == "worker"
     assert ack["payload"]["status"] == "accepted"
+
+    assert rejected["payload"]["status"] == "rejected"
+    assert rejected["payload"]["reason"] == "duplicate node_label"

@@ -158,16 +158,45 @@ def recv_msgs(sock: socket.socket, buffer: bytearray) -> List[dict]:
 class MasterRegistry:
     def __init__(self):
         self.workers = {}
+        self.node_labels = {}
 
     def upsert_worker(self, worker: dict) -> dict:
-        uuid_value = worker.get("uuid")
+        uuid_value = worker.get("node_id") or worker.get("uuid")
         if not uuid_value:
             raise ValueError("worker UUID is required")
-        self.workers[uuid_value] = worker
-        return self.workers[uuid_value]
+
+        candidate = dict(worker)
+        candidate["node_id"] = str(uuid_value)
+        candidate["node_label"] = candidate.get("node_label") or candidate.get("label")
+        candidate["group_label"] = candidate.get("group_label")
+        candidate["node_role"] = candidate.get("node_role")
+
+        existing = self.workers.get(candidate["node_id"])
+        if existing:
+            incompatible = (
+                existing.get("node_label") != candidate.get("node_label")
+                or existing.get("group_label") != candidate.get("group_label")
+                or existing.get("node_role") != candidate.get("node_role")
+            )
+            if incompatible:
+                raise ValueError("same node_id already exists with incompatible identity")
+            self.workers[candidate["node_id"]] = {**existing, **candidate}
+            return self.workers[candidate["node_id"]]
+
+        existing_label_owner = self.node_labels.get(candidate.get("node_label"))
+        if candidate.get("node_label") and existing_label_owner and existing_label_owner != candidate["node_id"]:
+            raise ValueError("node_label already registered for another worker")
+
+        self.workers[candidate["node_id"]] = candidate
+        if candidate.get("node_label"):
+            self.node_labels[candidate["node_label"]] = candidate["node_id"]
+        return self.workers[candidate["node_id"]]
 
     def get_worker(self, uuid_value: str):
         return self.workers.get(uuid_value)
 
     def remove_worker(self, uuid_value: str) -> None:
-        self.workers.pop(uuid_value, None)
+        worker = self.workers.pop(uuid_value, None)
+        if worker and worker.get("node_label") in self.node_labels:
+            if self.node_labels.get(worker["node_label"]) == uuid_value:
+                del self.node_labels[worker["node_label"]]
