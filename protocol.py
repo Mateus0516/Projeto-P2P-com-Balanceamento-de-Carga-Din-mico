@@ -414,6 +414,7 @@ class MasterRegistry:
                 worker["expected_heartbeat_sequence"] = None
                 log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat", "timeout", "unavailable")
                 return True
+            worker["status"] = "suspect"
             return False
 
     def begin_heartbeat_expectation(self, node_id: str, request_id: str, sequence: int) -> dict:
@@ -429,11 +430,19 @@ class MasterRegistry:
                     worker["expected_heartbeat_request_id"] = None
                     worker["expected_heartbeat_sequence"] = None
                     log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat", request_id, "unavailable")
-                else:
-                    worker["expected_heartbeat_request_id"] = None
-                    worker["expected_heartbeat_sequence"] = None
+                    worker["expected_heartbeat_request_id"] = str(request_id)
+                    worker["expected_heartbeat_sequence"] = int(sequence)
+                    return worker
+                worker["status"] = "suspect"
+                worker["expected_heartbeat_request_id"] = None
+                worker["expected_heartbeat_sequence"] = None
 
-            worker["status"] = "available" if worker.get("status") != "unavailable" else "unavailable"
+            if worker.get("heartbeat_misses", 0) >= 3:
+                worker["status"] = "unavailable"
+            elif int(worker.get("heartbeat_misses", 0) or 0) > 0:
+                worker["status"] = "suspect"
+            else:
+                worker["status"] = "available"
             worker["expected_heartbeat_request_id"] = str(request_id)
             worker["expected_heartbeat_sequence"] = int(sequence)
             return worker
@@ -468,6 +477,8 @@ class MasterRegistry:
                 if worker["heartbeat_misses"] >= 3:
                     worker["status"] = "unavailable"
                     log_event("ASD", worker.get("node_label", "unknown"), "master", "heartbeat_ack", request_id, "unavailable")
+                else:
+                    worker["status"] = "suspect"
                 return False
 
             return False

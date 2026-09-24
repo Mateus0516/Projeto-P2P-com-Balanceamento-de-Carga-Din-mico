@@ -1141,7 +1141,113 @@ def test_master_registry_heartbeat_ack_valid_resets_failure_counter():
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
 
 
-def test_master_registry_one_or_two_lost_heartbeats_do_not_mark_unavailable():
+def test_master_registry_liveness_transitions_from_available_to_suspect_to_unavailable():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+
+    worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
+    assert worker["status"] == "available"
+    assert worker["heartbeat_misses"] == 0
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other", 1, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 1
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other-2", 2, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-3", 3)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other-3", 3, "alive") is False
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "unavailable"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 3
+
+
+def test_master_registry_valid_heartbeat_restores_available_and_clears_misses():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "status": "suspect",
+        "heartbeat_misses": 2,
+    })
+
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected", 7)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-expected", 7, "alive") is True
+    worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
+    assert worker["status"] == "available"
+    assert worker["heartbeat_misses"] == 0
+
+
+def test_master_registry_reconnect_validates_and_restores_worker_available():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "status": "unavailable",
+        "heartbeat_misses": 3,
+    })
+
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "status": "available",
+        "heartbeat_misses": 0,
+    })
+    restored = registry.get_worker("11111111-1111-4111-8111-111111111111")
+    assert restored["status"] == "available"
+    assert restored["heartbeat_misses"] == 0
+
+
+def test_master_registry_worker_a_failure_does_not_change_worker_b_status():
+    registry = MasterRegistry()
+    registry.upsert_worker({
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    })
+    registry.upsert_worker({
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "worker-b",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    })
+
+    for sequence, request_id in ((1, "req-a-1"), (2, "req-a-2"), (3, "req-a-3")):
+        registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
+        registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive")
+
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "unavailable"
+    assert registry.get_worker("22222222-2222-4222-8222-222222222222")["status"] == "available"
+
+
+def test_master_registry_one_or_two_lost_heartbeats_mark_worker_as_suspect():
     registry = MasterRegistry()
     registry.upsert_worker({
         "node_id": "11111111-1111-4111-8111-111111111111",
@@ -1154,11 +1260,11 @@ def test_master_registry_one_or_two_lost_heartbeats_do_not_mark_unavailable():
 
     registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
     assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 1, "alive") is False
-    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
 
     registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
     assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 3, "alive") is False
-    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
+    assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
 
 
