@@ -147,15 +147,21 @@ def validate_message(message: Any) -> bool:
         sequence = payload.get("sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool):
             return False
+        if message["type"] == "heartbeat":
+            assignment_epoch = payload.get("assignment_epoch")
+            if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+                return False
         if message["type"] == "heartbeat_ack" and payload.get("status") not in {"alive", "rejected"}:
             return False
 
     return True
 
 
-def build_heartbeat_message(source: dict, destination: dict, sequence: int, request_id: str | None = None) -> dict:
+def build_heartbeat_message(source: dict, destination: dict, sequence: int, request_id: str | None = None, assignment_epoch: int = 0) -> dict:
     if not isinstance(sequence, int) or isinstance(sequence, bool):
         raise ValueError("heartbeat sequence must be an integer")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("heartbeat assignment_epoch must be a non-negative integer")
 
     message_id = f"heartbeat-{uuid.uuid4()}"
     return {
@@ -166,7 +172,7 @@ def build_heartbeat_message(source: dict, destination: dict, sequence: int, requ
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
-        "payload": {"sequence": int(sequence)},
+        "payload": {"sequence": int(sequence), "assignment_epoch": int(assignment_epoch)},
     }
 
 

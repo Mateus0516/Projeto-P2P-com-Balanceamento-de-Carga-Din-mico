@@ -833,6 +833,7 @@ def test_heartbeat_messages_follow_sd_2026_2_v1_and_correlate_sequence():
         },
         sequence=7,
         request_id="req-heart-7",
+        assignment_epoch=0,
     )
     ack = build_heartbeat_ack_message(heart, source={
         "group_label": "p2p-cluster",
@@ -849,10 +850,96 @@ def test_heartbeat_messages_follow_sd_2026_2_v1_and_correlate_sequence():
     assert validate_message(heart) is True
     assert heart["type"] == "heartbeat"
     assert heart["payload"]["sequence"] == 7
+    assert heart["payload"]["assignment_epoch"] == 0
     assert ack["type"] == "heartbeat_ack"
     assert ack["request_id"] == heart["request_id"]
     assert ack["payload"]["sequence"] == 7
     assert ack["payload"]["status"] == "alive"
+
+
+def test_worker_heartbeat_uses_current_assignment_epoch_from_config_and_preserves_it_across_retries():
+    config = {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker", "assignment_epoch": 3}
+    heart = build_heartbeat_message(
+        source={
+            "group_label": config["group_label"],
+            "node_id": config["node_id"],
+            "node_label": config["node_label"],
+            "node_role": config["node_role"],
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=12,
+        request_id="req-heart-config-3",
+        assignment_epoch=config["assignment_epoch"],
+    )
+    retry_copy = dict(heart)
+    retry_copy["payload"] = dict(heart["payload"])
+
+    assert validate_message(heart) is True
+    assert heart["payload"]["assignment_epoch"] == 3
+    assert retry_copy == heart
+
+
+def test_heartbeat_rejects_invalid_assignment_epoch_values():
+    base = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "msg-heart-invalid-assignment",
+        "request_id": "req-heart-invalid-assignment",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"sequence": 1, "assignment_epoch": 0},
+    }
+
+    for invalid_value in (-1, True, "1", 1.5, None):
+        payload = {**base["payload"], "assignment_epoch": invalid_value}
+        assert validate_message({**base, "payload": payload}) is False
+
+
+def test_valid_heartbeat_still_produces_heartbeat_ack_when_assignment_epoch_is_present():
+    heart = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=5,
+        request_id="req-heart-valid-ack",
+        assignment_epoch=0,
+    )
+
+    assert validate_message(heart) is True
+    ack = build_heartbeat_ack_message(heart, source={
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }, destination=heart["source"])
+    assert ack["type"] == "heartbeat_ack"
+    assert ack["payload"]["status"] == "alive"
+    assert ack["payload"]["sequence"] == heart["payload"]["sequence"]
 
 
 def test_master_replies_to_worker_heartbeat():
@@ -894,7 +981,7 @@ def test_master_replies_to_worker_heartbeat():
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"sequence": 9},
+        "payload": {"sequence": 9, "assignment_epoch": 0},
     }
 
     reply = exchange(heartbeat)
@@ -1433,7 +1520,7 @@ def test_handle_client_deduplicates_retransmitted_heartbeat_and_reuses_cached_ac
         "timestamp_ms": 1727170000125,
         "source": source,
         "destination": {"group_label": "p2p-cluster", "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": master_identity["node_role"]},
-        "payload": {"sequence": 2},
+        "payload": {"sequence": 2, "assignment_epoch": 0},
     }
 
     server_sock, client_sock = socket.socketpair()

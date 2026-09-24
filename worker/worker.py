@@ -458,6 +458,7 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
 
 def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object], sequence: int, control_session: WorkerControlSession | None = None) -> None:
     master_identity = load_master_identity(config)
+    assignment_epoch = _coerce_assignment_epoch(config.get("assignment_epoch", 0))
     message = build_heartbeat_message(
         source={
             "group_label": str(config.get("group_label", "p2p-cluster")),
@@ -472,6 +473,7 @@ def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object]
             "node_role": str(master_identity.get("node_role", "master")),
         },
         sequence=sequence,
+        assignment_epoch=assignment_epoch,
     )
 
     session = control_session or open_control_session(master_host, master_port)

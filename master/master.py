@@ -134,6 +134,7 @@ def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, obj
         },
         sequence=sequence,
         request_id=request_id,
+        assignment_epoch=int(worker_identity.get("assignment_epoch", 0) or 0),
     )
     with write_lock:
         send_msg(conn, message)
@@ -273,6 +274,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         "node_role": source["node_role"],
                         "host": payload.get("host", "127.0.0.1"),
                         "port": payload.get("port", 0),
+                        "assignment_epoch": int(payload.get("assignment_epoch", 0)),
                     }
                     try:
                         registry.upsert_worker(worker_record)
