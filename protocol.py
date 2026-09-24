@@ -1,5 +1,6 @@
 import json
 import socket
+import time
 import uuid
 from typing import Any, List
 
@@ -88,10 +89,52 @@ def validate_message(message: Any) -> bool:
     if not _validate_node_identity(message["destination"]):
         return False
 
-    if message["payload"] is None:
+    payload = message["payload"]
+    if payload is None:
         return False
 
+    if message["type"] in {"heartbeat", "heartbeat_ack"}:
+        if not isinstance(payload, dict):
+            return False
+        sequence = payload.get("sequence")
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            return False
+        if message["type"] == "heartbeat_ack" and payload.get("status") not in {"alive", "rejected"}:
+            return False
+
     return True
+
+
+def build_heartbeat_message(source: dict, destination: dict, sequence: int, request_id: str | None = None) -> dict:
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        raise ValueError("heartbeat sequence must be an integer")
+
+    message_id = f"heartbeat-{uuid.uuid4()}"
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": message_id,
+        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {"sequence": int(sequence)},
+    }
+
+
+def build_heartbeat_ack_message(request_message: dict, source: dict, destination: dict) -> dict:
+    payload = request_message.get("payload", {}) if isinstance(request_message.get("payload", {}), dict) else {}
+    sequence = payload.get("sequence", 0)
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat_ack",
+        "message_id": f"heartbeat-ack-{uuid.uuid4()}",
+        "request_id": request_message["request_id"],
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {"sequence": int(sequence), "status": "alive"},
+    }
 
 
 def extract_complete_messages(buffer: bytearray) -> List[dict]:

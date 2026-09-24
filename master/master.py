@@ -13,7 +13,15 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from protocol import MasterRegistry, log_event, recv_msgs, send_msg, validate_message
+from protocol import (
+    MasterRegistry,
+    build_heartbeat_ack_message,
+    build_heartbeat_message,
+    log_event,
+    recv_msgs,
+    send_msg,
+    validate_message,
+)
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -106,8 +114,53 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
     }
 
 
+def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, sequence: int, request_id: str | None = None) -> dict:
+    message = build_heartbeat_message(
+        source={
+            "group_label": str(master_identity["group_label"]),
+            "node_id": str(master_identity["node_id"]),
+            "node_label": str(master_identity["node_label"]),
+            "node_role": str(master_identity["node_role"]),
+        },
+        destination={
+            "group_label": str(worker_identity["group_label"]),
+            "node_id": str(worker_identity["node_id"]),
+            "node_label": str(worker_identity["node_label"]),
+            "node_role": str(worker_identity["node_role"]),
+        },
+        sequence=sequence,
+        request_id=request_id,
+    )
+    with write_lock:
+        send_msg(conn, message)
+    return message
+
+
 def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object]) -> None:
     buffer = bytearray()
+    write_lock = threading.Lock()
+    heartbeat_state_lock = threading.Lock()
+    last_heartbeat_request_id = None
+    last_heartbeat_sequence = None
+
+    def maybe_send_master_heartbeat(worker_identity: Dict[str, object]) -> None:
+        nonlocal last_heartbeat_request_id, last_heartbeat_sequence
+        sequence = 0
+
+        def loop() -> None:
+            nonlocal sequence, last_heartbeat_request_id, last_heartbeat_sequence
+            while True:
+                time.sleep(10)
+                sequence += 1
+                request_id = f"req-master-heart-{sequence}"
+                message = send_heartbeat_to_worker(conn, master_identity, worker_identity, write_lock, sequence=sequence, request_id=request_id)
+                with heartbeat_state_lock:
+                    last_heartbeat_request_id = message["request_id"]
+                    last_heartbeat_sequence = message["payload"]["sequence"]
+                log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "sent")
+
+        threading.Thread(target=loop, daemon=True).start()
+
     try:
         while True:
             messages = recv_msgs(conn, buffer)
@@ -127,13 +180,15 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     payload = message.get("payload", {})
                     if not isinstance(payload, dict):
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "discarded")
-                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason="invalid payload"))
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason="invalid payload"))
                         continue
 
                     if source.get("group_label") != master_identity.get("group_label"):
                         reason = "group_label mismatch"
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
-                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
                     worker_record = {
@@ -149,13 +204,31 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     except ValueError as exc:
                         reason = str(exc)
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
-                        send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
                     ack = build_ack_message(message, "accepted", master_identity)
-                    send_msg(conn, ack)
+                    with write_lock:
+                        send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
+                    maybe_send_master_heartbeat(worker_record)
+
+                elif msg_type == "heartbeat":
+                    ack = build_heartbeat_ack_message(message, source=master_identity, destination=source)
+                    with write_lock:
+                        send_msg(conn, ack)
+                    log_event("ASD", "master", source["node_label"], "heartbeat_ack", request_id, "sent")
+
+                elif msg_type == "heartbeat_ack":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    sequence = payload.get("sequence")
+                    with heartbeat_state_lock:
+                        if request_id == last_heartbeat_request_id and sequence == last_heartbeat_sequence:
+                            log_event("ASD", source["node_label"], "master", msg_type, request_id, "received")
+                        else:
+                            log_event("ASD", source["node_label"], "master", msg_type, request_id, "correlated")
 
                 else:
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")

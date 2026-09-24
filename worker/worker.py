@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import queue
 import socket
 import sys
 import threading
@@ -13,7 +14,14 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from protocol import log_event, recv_msgs, send_msg, validate_message
+from protocol import (
+    build_heartbeat_ack_message,
+    build_heartbeat_message,
+    log_event,
+    recv_msgs,
+    send_msg,
+    validate_message,
+)
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
 
@@ -88,7 +96,89 @@ def load_master_identity() -> Dict[str, object]:
     }
 
 
-def register_worker(master_host: str, master_port: int, config: Dict[str, object]) -> None:
+class WorkerControlSession:
+    def __init__(self, sock: socket.socket):
+        self.sock = sock
+        self.lock = threading.Lock()
+        self.buffer = bytearray()
+        self._queue: "queue.Queue[dict]" = queue.Queue()
+        self._closed = threading.Event()
+        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader.start()
+
+    def _reader_loop(self) -> None:
+        while not self._closed.is_set():
+            try:
+                messages = recv_msgs(self.sock, self.buffer)
+            except OSError:
+                break
+
+            if not messages:
+                time.sleep(0.05)
+                continue
+
+            for message in messages:
+                if not validate_message(message):
+                    continue
+
+                if message.get("type") == "heartbeat":
+                    ack = build_heartbeat_ack_message(message, source={
+                        "group_label": message["destination"]["group_label"],
+                        "node_id": message["destination"]["node_id"],
+                        "node_label": message["destination"]["node_label"],
+                        "node_role": message["destination"]["node_role"],
+                    }, destination={
+                        "group_label": message["source"]["group_label"],
+                        "node_id": message["source"]["node_id"],
+                        "node_label": message["source"]["node_label"],
+                        "node_role": message["source"]["node_role"],
+                    })
+                    with self.lock:
+                        send_msg(self.sock, ack)
+                    log_event("ASD", message["destination"]["node_label"], message["source"]["node_label"], "heartbeat_ack", message["request_id"], "sent")
+                    continue
+
+                self._queue.put(message)
+
+    def send_message(self, message: dict) -> None:
+        with self.lock:
+            send_msg(self.sock, message)
+
+    def wait_for_message(self, *, types: set[str] | None = None, request_id: str | None = None, timeout: float = 5.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                remaining = max(0.05, deadline - time.monotonic())
+                message = self._queue.get(timeout=remaining)
+            except queue.Empty:
+                continue
+
+            if types is not None and message.get("type") not in types:
+                continue
+            if request_id is not None and message.get("request_id") != request_id:
+                continue
+            return message
+
+        raise TimeoutError(f"No matching message received for {request_id or types or 'any'}")
+
+    def close(self) -> None:
+        self._closed.set()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def open_control_session(master_host: str, master_port: int, timeout: float = 5.0) -> WorkerControlSession:
+    sock = socket.create_connection((master_host, master_port), timeout=timeout)
+    return WorkerControlSession(sock)
+
+
+def register_worker(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession | None = None) -> None:
     node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     node_role = str(config.get("node_role", "worker"))
@@ -117,37 +207,83 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
         },
     }
 
-    with socket.create_connection((master_host, master_port), timeout=5) as sock:
-        send_msg(sock, message)
-        log_event("ASD", config["label"], "master", message["type"], message["request_id"], "sent")
+    session = control_session or open_control_session(master_host, master_port)
+    try:
+        session.send_message(message)
+        log_event("ASD", node_label, "master", message["type"], message["request_id"], "sent")
 
-        buffer = bytearray()
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            messages = recv_msgs(sock, buffer)
-            if not messages:
-                time.sleep(0.1)
-                continue
+        try:
+            reply = session.wait_for_message(types={"registration_ack"}, request_id=message["request_id"], timeout=5)
+        except TimeoutError:
+            log_event("ASD", node_label, "master", "registration_ack", message["request_id"], "timeout")
+            return
 
-            for reply in messages:
-                if not validate_message(reply):
-                    log_event("ASD", config["label"], "master", "invalid_reply", message["request_id"], "discarded")
-                    continue
+        status = reply.get("payload", {}).get("status", "unknown")
+        reason = reply.get("payload", {}).get("reason")
+        if status == "accepted":
+            log_event("ASD", node_label, "master", reply["type"], reply["request_id"], "accepted")
+            return
 
-                if reply["type"] == "registration_ack":
-                    status = reply.get("payload", {}).get("status", "unknown")
-                    reason = reply.get("payload", {}).get("reason")
-                    if status == "accepted":
-                        log_event("ASD", config["label"], "master", reply["type"], reply["request_id"], "accepted")
-                        return
-
-                    log_event("ASD", config["label"], "master", reply["type"], reply["request_id"], f"rejected:{reason or 'unknown'}")
-                    return
-
-        log_event("ASD", config["label"], "master", "registration_ack", message["request_id"], "timeout")
+        log_event("ASD", node_label, "master", reply["type"], reply["request_id"], f"rejected:{reason or 'unknown'}")
+    finally:
+        if control_session is None:
+            session.close()
 
 
-def run_listener(host: str, port: int, worker_label: str) -> None:
+def send_heartbeat(master_host: str, master_port: int, config: Dict[str, object], sequence: int, control_session: WorkerControlSession | None = None) -> None:
+    master_identity = load_master_identity()
+    message = build_heartbeat_message(
+        source={
+            "group_label": str(config.get("group_label", "p2p-cluster")),
+            "node_id": str(config.get("node_id", config.get("uuid", str(uuid.uuid4())))),
+            "node_label": str(config.get("node_label", config.get("label", "worker-a"))),
+            "node_role": str(config.get("node_role", "worker")),
+        },
+        destination={
+            "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+            "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+            "node_label": str(master_identity.get("node_label", "master")),
+            "node_role": str(master_identity.get("node_role", "master")),
+        },
+        sequence=sequence,
+    )
+
+    session = control_session or open_control_session(master_host, master_port)
+    try:
+        session.send_message(message)
+        log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat", message["request_id"], "sent")
+
+        try:
+            reply = session.wait_for_message(types={"heartbeat_ack"}, request_id=message["request_id"], timeout=5)
+        except TimeoutError:
+            log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat_ack", message["request_id"], "timeout")
+            return
+
+        payload = reply.get("payload", {}) if isinstance(reply.get("payload", {}), dict) else {}
+        if payload.get("sequence") == sequence and payload.get("status") == "alive":
+            log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat_ack", message["request_id"], "received")
+            return
+
+        log_event("ASD", str(config.get("node_label", "worker-a")), "master", "heartbeat_ack", message["request_id"], "rejected")
+    finally:
+        if control_session is None:
+            session.close()
+
+
+def start_heartbeat_loop(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession, interval_seconds: float = 10.0) -> None:
+    sequence = 0
+
+    def loop() -> None:
+        nonlocal sequence
+        while True:
+            time.sleep(interval_seconds)
+            sequence += 1
+            send_heartbeat(master_host, master_port, config, sequence, control_session=control_session)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> None:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
@@ -161,8 +297,14 @@ def run_listener(host: str, port: int, worker_label: str) -> None:
                 if not messages:
                     continue
                 for msg in messages:
-                    if validate_message(msg):
-                        log_event("ASD", msg["source"]["node_label"], worker_label, msg["type"], msg["request_id"], "received")
+                    if not validate_message(msg):
+                        continue
+                    if msg["type"] == "heartbeat":
+                        ack = build_heartbeat_ack_message(msg, source=worker_identity, destination=msg["source"])
+                        send_msg(conn, ack)
+                        log_event("ASD", worker_identity.get("node_label", "worker"), msg["source"]["node_label"], "heartbeat_ack", msg["request_id"], "sent")
+                        continue
+                    log_event("ASD", msg["source"]["node_label"], worker_identity.get("node_label", "worker"), msg["type"], msg["request_id"], "received")
         except ConnectionResetError:
             pass
         finally:
@@ -186,9 +328,17 @@ if __name__ == "__main__":
     config["port"] = args.port
 
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
-    listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], node_label), daemon=True)
+    worker_identity = {
+        "group_label": str(config.get("group_label", "p2p-cluster")),
+        "node_id": str(config.get("node_id", config.get("uuid", str(uuid.uuid4())))),
+        "node_label": node_label,
+        "node_role": str(config.get("node_role", "worker")),
+    }
+    listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], worker_identity), daemon=True)
     listener_thread.start()
 
-    register_worker(args.master_host, args.master_port, config)
+    control_session = open_control_session(args.master_host, args.master_port)
+    register_worker(args.master_host, args.master_port, config, control_session=control_session)
+    start_heartbeat_loop(args.master_host, args.master_port, config, control_session=control_session)
     while True:
         time.sleep(1)

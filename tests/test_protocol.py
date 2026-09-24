@@ -3,9 +3,21 @@ import socket
 import threading
 import uuid
 
-from master.master import build_ack_message, handle_client, load_or_create_config as load_master_config
-from protocol import MasterRegistry, extract_complete_messages, send_msg, validate_message
-from worker.worker import load_or_create_config as load_worker_config
+from master.master import (
+    build_ack_message,
+    handle_client,
+    load_or_create_config as load_master_config,
+    send_heartbeat_to_worker,
+)
+from protocol import (
+    MasterRegistry,
+    build_heartbeat_ack_message,
+    build_heartbeat_message,
+    extract_complete_messages,
+    send_msg,
+    validate_message,
+)
+from worker.worker import WorkerControlSession, load_or_create_config as load_worker_config
 
 
 def test_extract_complete_messages_handles_fragmentation_and_coalescence():
@@ -400,6 +412,93 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
     assert registry.workers["44444444-4444-4444-8444-444444444444"]["node_label"] == "worker-good"
 
 
+def test_heartbeat_messages_follow_sd_2026_2_v1_and_correlate_sequence():
+    heart = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=7,
+        request_id="req-heart-7",
+    )
+    ack = build_heartbeat_ack_message(heart, source={
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }, destination={
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    })
+
+    assert validate_message(heart) is True
+    assert heart["type"] == "heartbeat"
+    assert heart["payload"]["sequence"] == 7
+    assert ack["type"] == "heartbeat_ack"
+    assert ack["request_id"] == heart["request_id"]
+    assert ack["payload"]["sequence"] == 7
+    assert ack["payload"]["status"] == "alive"
+
+
+def test_master_replies_to_worker_heartbeat():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    def exchange(message):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        send_msg(client_sock, message)
+        try:
+            raw = client_sock.recv(4096)
+        finally:
+            client_sock.close()
+        return json.loads(raw.decode("utf-8").strip())
+
+    heartbeat = {
+        "version": "sd_2026_2_v1",
+        "type": "heartbeat",
+        "message_id": "hb-1",
+        "request_id": "req-hb-1",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"sequence": 9},
+    }
+
+    reply = exchange(heartbeat)
+    assert reply["type"] == "heartbeat_ack"
+    assert reply["request_id"] == heartbeat["request_id"]
+    assert reply["payload"]["sequence"] == 9
+    assert reply["payload"]["status"] == "alive"
+
+
 def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     request = {
         "version": "sd_2026_2_v1",
@@ -440,3 +539,74 @@ def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
 
     assert rejected["payload"]["status"] == "rejected"
     assert rejected["payload"]["reason"] == "duplicate node_label"
+
+
+def test_master_send_heartbeat_uses_existing_socket_and_preserves_sequence():
+    server_sock, client_sock = socket.socketpair()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    write_lock = threading.Lock()
+
+    send_heartbeat_to_worker(server_sock, master_identity, worker_identity, write_lock, sequence=21, request_id="req-master-heart-21")
+    raw = client_sock.recv(4096)
+    message = json.loads(raw.decode("utf-8").strip())
+
+    assert message["type"] == "heartbeat"
+    assert message["request_id"] == "req-master-heart-21"
+    assert message["payload"]["sequence"] == 21
+    assert message["source"]["node_label"] == "master"
+    assert message["destination"]["node_label"] == "worker-a"
+
+
+def test_worker_control_session_reuses_one_socket_for_successive_heartbeats():
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    heartbeat_one = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=11,
+        request_id="req-hb-11",
+    )
+    heartbeat_two = build_heartbeat_message(
+        source=heartbeat_one["source"],
+        destination=heartbeat_one["destination"],
+        sequence=12,
+        request_id="req-hb-12",
+    )
+
+    session.send_message(heartbeat_one)
+    session.send_message(heartbeat_two)
+
+    first_ack = build_heartbeat_ack_message(heartbeat_one, source=heartbeat_one["destination"], destination=heartbeat_one["source"])
+    second_ack = build_heartbeat_ack_message(heartbeat_two, source=heartbeat_two["destination"], destination=heartbeat_two["source"])
+
+    send_msg(server_sock, first_ack)
+    send_msg(server_sock, second_ack)
+
+    first_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-11", timeout=2)
+    second_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-12", timeout=2)
+
+    assert first_response["payload"]["sequence"] == 11
+    assert second_response["payload"]["sequence"] == 12
+    assert session.sock is client_sock
