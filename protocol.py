@@ -3,6 +3,8 @@ import socket
 import uuid
 from typing import Any, List
 
+MAX_NDJSON_MESSAGE_BYTES = 65536
+
 REQUIRED_MESSAGE_FIELDS = (
     "version",
     "type",
@@ -24,6 +26,19 @@ REQUIRED_NODE_FIELDS = (
 
 def log_event(group: str, origin: str, destination: str, msg_type: str, request_id: str, result: str) -> None:
     print(f"{group} | {origin} | {destination} | {msg_type} | {request_id} | {result}")
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _reject_special_float(value: str) -> None:
+    raise ValueError(f"Non-finite JSON number is not allowed: {value}")
 
 
 def _validate_node_identity(node: Any) -> bool:
@@ -93,6 +108,10 @@ def extract_complete_messages(buffer: bytearray) -> List[dict]:
         if not raw_line.strip():
             continue
 
+        if len(raw_line) > MAX_NDJSON_MESSAGE_BYTES:
+            log_event("ASD", "unknown", "unknown", "invalid_json", "unknown", "discarded")
+            continue
+
         try:
             decoded = raw_line.decode("utf-8")
         except UnicodeDecodeError:
@@ -100,12 +119,12 @@ def extract_complete_messages(buffer: bytearray) -> List[dict]:
             continue
 
         try:
-            payload = json.loads(decoded)
-        except json.JSONDecodeError:
+            payload = json.loads(decoded, object_pairs_hook=_reject_duplicate_keys, parse_constant=_reject_special_float)
+        except (json.JSONDecodeError, ValueError):
             log_event("ASD", "unknown", "unknown", "invalid_json", "unknown", "discarded")
             continue
 
-        if not validate_message(payload):
+        if not isinstance(payload, dict) or not validate_message(payload):
             source = payload.get("source", {}) if isinstance(payload, dict) else {}
             source_label = source.get("node_label", "unknown") if isinstance(source, dict) else "unknown"
             msg_type = payload.get("type", "invalid_message") if isinstance(payload, dict) else "invalid_message"

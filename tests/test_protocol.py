@@ -138,6 +138,74 @@ def test_extract_complete_messages_discards_invalid_json_with_log(capfd):
     assert "invalid_json" in captured.lower() or "discarded" in captured.lower()
 
 
+def test_extract_complete_messages_rejects_duplicate_keys_and_non_finite_numbers():
+    valid_message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "m-dup",
+        "request_id": "r-dup",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+
+    duplicate = (
+        b'{"version":"sd_2026_2_v1","type":"register_worker","message_id":"m-dup","request_id":"r-dup",'
+        b'"timestamp_ms":1727170000123,"source":{"group_label":"p2p-cluster","node_id":"11111111-1111-4111-8111-111111111111",'
+        b'"node_label":"worker-a","node_role":"worker","node_role":"master"},'
+        b'"destination":{"group_label":"p2p-cluster","node_id":"22222222-2222-4222-8222-222222222222",'
+        b'"node_label":"master","node_role":"master"},"payload":{"host":"127.0.0.1","port":9101}}\n'
+    )
+    invalid_nan = (
+        b'{"version":"sd_2026_2_v1","type":"register_worker","message_id":"m-nan","request_id":"r-nan",'
+        b'"timestamp_ms":1727170000123,"source":{"group_label":"p2p-cluster","node_id":"11111111-1111-4111-8111-111111111111",'
+        b'"node_label":"worker-a","node_role":"worker"},'
+        b'"destination":{"group_label":"p2p-cluster","node_id":"22222222-2222-4222-8222-222222222222",'
+        b'"node_label":"master","node_role":"master"},"payload":{"host":NaN,"port":9101}}\n'
+    )
+
+    assert extract_complete_messages(bytearray(duplicate)) == []
+    assert extract_complete_messages(bytearray(invalid_nan)) == []
+
+
+def test_extract_complete_messages_rejects_messages_over_65536_bytes():
+    valid_message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "m-big",
+        "request_id": "r-big",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101, "blob": "x" * 70000},
+    }
+
+    payload = (json.dumps(valid_message, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+    assert len(payload) > 65536
+    assert extract_complete_messages(bytearray(payload)) == []
+
+
 def test_master_registry_updates_existing_uuid():
     registry = MasterRegistry()
     first = {"uuid": "u-9", "label": "worker-a", "host": "127.0.0.1", "port": 9001}
