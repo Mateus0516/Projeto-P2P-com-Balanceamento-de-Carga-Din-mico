@@ -5,6 +5,8 @@ import time
 import uuid
 from pathlib import Path
 
+import pytest
+
 from master.master import (
     build_ack_message,
     handle_client,
@@ -81,7 +83,210 @@ def test_master_registry_tracks_two_workers_separately_and_keeps_same_identity_a
     assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
 
 
-def test_extract_complete_messages_handles_fragmentation_and_coalescence():
+def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
+    registry = MasterRegistry()
+    worker_a = {
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    worker_b = {
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "worker-b",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    }
+
+    registry.upsert_worker(worker_a)
+    registry.upsert_worker(worker_b)
+
+    assert len(registry.workers) == 2
+    assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
+    assert set(registry.node_labels) == {"worker-a", "worker-b"}
+
+    registry.mark_worker_unavailable(worker_a["node_id"], reason="socket closed")
+    assert registry.get_worker(worker_a["node_id"])["status"] == "unavailable"
+    assert registry.get_worker(worker_b["node_id"])["status"] == "available"
+
+    registry.upsert_worker(worker_a)
+    assert len(registry.workers) == 2
+    assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
+    assert registry.node_labels["worker-a"] == worker_a["node_id"]
+
+    conflicting_label = {
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-a",
+        "group_label": "p2p-cluster",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9103,
+    }
+    with pytest.raises(ValueError, match="node_label already registered for another worker"):
+        registry.upsert_worker(conflicting_label)
+
+    registry.upsert_worker(worker_b)
+    assert len(registry.workers) == 2
+    assert set(registry.node_labels) == {"worker-a", "worker-b"}
+
+
+def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    def exchange(message: dict | str | bytes):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        try:
+            if isinstance(message, (str, bytes)):
+                payload = message if isinstance(message, bytes) else message.encode("utf-8")
+                client_sock.sendall(payload)
+            else:
+                send_msg(client_sock, message)
+            raw = client_sock.recv(4096)
+        except socket.timeout:
+            client_sock.close()
+            return None
+        finally:
+            try:
+                client_sock.close()
+            except OSError:
+                pass
+
+        if not raw:
+            return None
+        return json.loads(raw.decode("utf-8").strip())
+
+    missing_field = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-missing-field",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+    wrong_capitalization = {
+        "version": "sd_2026_2_v1",
+        "Type": "register_worker",
+        "message_id": "msg-capitalized",
+        "request_id": "req-capitalized",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+    unknown_type = {
+        "version": "sd_2026_2_v1",
+        "type": "unknown_event",
+        "message_id": "msg-unknown-type",
+        "request_id": "req-unknown-type",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"detail": "unsupported"},
+    }
+    unknown_version = {
+        "version": "sd_2026_2_v99",
+        "type": "register_worker",
+        "message_id": "msg-unknown-version",
+        "request_id": "req-unknown-version",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+    malformed_json = '{"version":"sd_2026_2_v1","type":'
+
+    for message in (missing_field, wrong_capitalization, unknown_type, unknown_version):
+        reply = exchange(message)
+        assert reply is not None
+        assert reply["type"] == "protocol_error"
+        assert "reason" in reply["payload"]
+
+    assert exchange(malformed_json) is None
+
+    valid_message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-valid-after-invalid",
+        "request_id": "req-valid-after-invalid",
+        "timestamp_ms": 1727170000456,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "44444444-4444-4444-8444-444444444444",
+            "node_label": "worker-good",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9106},
+    }
+
+    valid_reply = exchange(valid_message)
+    assert valid_reply is not None
+    assert valid_reply["type"] == "registration_ack"
+    assert valid_reply["payload"]["status"] == "accepted"
+    assert len(registry.workers) == 1
+    assert registry.workers["44444444-4444-4444-8444-444444444444"]["node_label"] == "worker-good"
+
+
+def test_ct_01_ndjson_tcp_framing_acceptance():
     buffer = bytearray()
     messages = [
         {
@@ -168,9 +373,11 @@ def test_extract_complete_messages_handles_fragmentation_and_coalescence():
         received.extend(extract_complete_messages(buffer))
 
     assert len(received) == 3
-    assert received[0]["message_id"] == "m1"
-    assert received[1]["message_id"] == "m2"
-    assert received[2]["message_id"] == "m3"
+    assert all(validate_message(message) for message in received)
+    assert [message["message_id"] for message in received] == ["m1", "m2", "m3"]
+    assert received[0]["source"]["node_label"] == "worker-a"
+    assert received[1]["source"]["node_label"] == "worker-b"
+    assert received[2]["source"]["node_label"] == "worker-c"
 
 
 def test_validate_message_rejects_missing_required_fields():

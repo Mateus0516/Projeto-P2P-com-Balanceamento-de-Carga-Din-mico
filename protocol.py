@@ -76,6 +76,9 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error"}:
+        return False
+
     for field in ("type", "message_id", "request_id"):
         if not isinstance(message[field], str) or not message[field].strip():
             return False
@@ -138,6 +141,66 @@ def build_heartbeat_ack_message(request_message: dict, source: dict, destination
     }
 
 
+def build_protocol_error_message(message: dict, master_identity: dict, reason: str) -> dict:
+    if not isinstance(message, dict):
+        raise ValueError("protocol_error requires a message dict")
+
+    request_id = str(message.get("request_id", "unknown"))
+    source = message.get("source") if isinstance(message.get("source"), dict) else {}
+    destination = message.get("destination") if isinstance(message.get("destination"), dict) else {}
+    unsafe_source = {
+        "group_label": str(source.get("group_label", "unknown")),
+        "node_id": str(source.get("node_id", "00000000-0000-4000-8000-000000000000")),
+        "node_label": str(source.get("node_label", "unknown")),
+        "node_role": str(source.get("node_role", "unknown")),
+    }
+    unsafe_destination = {
+        "group_label": str(destination.get("group_label", "unknown")),
+        "node_id": str(destination.get("node_id", "00000000-0000-4000-8000-000000000000")),
+        "node_label": str(destination.get("node_label", "unknown")),
+        "node_role": str(destination.get("node_role", "unknown")),
+    }
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "protocol_error",
+        "message_id": f"protocol-error-{uuid.uuid4()}",
+        "request_id": request_id,
+        "timestamp_ms": int(time.time() * 1000),
+        "source": {
+            "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+            "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+            "node_label": str(master_identity.get("node_label", "master")),
+            "node_role": str(master_identity.get("node_role", "master")),
+        },
+        "destination": unsafe_source or unsafe_destination,
+        "payload": {"status": "error", "reason": str(reason)},
+    }
+
+
+def classify_protocol_error(message: dict) -> str:
+    if not isinstance(message, dict):
+        return "invalid message payload"
+
+    required_fields = [field for field in REQUIRED_MESSAGE_FIELDS if field not in message]
+    if required_fields:
+        return f"missing required field(s): {', '.join(required_fields)}"
+
+    if "Type" in message and "type" not in message:
+        return "invalid field capitalization: use 'type' instead of 'Type'"
+    if "Version" in message and "version" not in message:
+        return "invalid field capitalization: use 'version' instead of 'Version'"
+
+    if "type" in message and isinstance(message["type"], str):
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error"}:
+            return f"unknown message type: {message['type']}"
+
+    if "version" in message and isinstance(message["version"], str):
+        if message["version"] != "sd_2026_2_v1":
+            return f"unknown protocol version: {message['version']}"
+
+    return "invalid protocol envelope"
+
+
 def extract_complete_messages(buffer: bytearray) -> List[dict]:
     messages: List[dict] = []
 
@@ -168,13 +231,17 @@ def extract_complete_messages(buffer: bytearray) -> List[dict]:
             log_event("ASD", "unknown", "unknown", "invalid_json", "unknown", "discarded")
             continue
 
-        if not isinstance(payload, dict) or not validate_message(payload):
-            source = payload.get("source", {}) if isinstance(payload, dict) else {}
-            source_label = source.get("node_label", "unknown") if isinstance(source, dict) else "unknown"
-            msg_type = payload.get("type", "invalid_message") if isinstance(payload, dict) else "invalid_message"
-            request_id = payload.get("request_id", "unknown") if isinstance(payload, dict) else "unknown"
-            log_event("ASD", source_label, "unknown", msg_type, request_id, "discarded")
+        if not isinstance(payload, dict):
+            log_event("ASD", "unknown", "unknown", "invalid_message", "unknown", "discarded")
             continue
+
+        source = payload.get("source", {}) if isinstance(payload, dict) else {}
+        source_label = source.get("node_label", "unknown") if isinstance(source, dict) else "unknown"
+        msg_type = payload.get("type", "invalid_message") if isinstance(payload, dict) else "invalid_message"
+        request_id = payload.get("request_id", "unknown") if isinstance(payload, dict) else "unknown"
+
+        if not validate_message(payload):
+            log_event("ASD", source_label, "unknown", msg_type, request_id, "discarded")
 
         messages.append(payload)
 

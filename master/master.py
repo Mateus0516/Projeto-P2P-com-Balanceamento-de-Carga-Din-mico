@@ -17,6 +17,8 @@ from protocol import (
     MasterRegistry,
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_protocol_error_message,
+    classify_protocol_error,
     log_event,
     recv_msgs,
     send_msg,
@@ -208,7 +210,11 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
             for message in messages:
                 if not validate_message(message):
-                    log_event("ASD", "unknown", "master", "invalid_message", "unknown", "discarded")
+                    reason = classify_protocol_error(message)
+                    log_event("ASD", message.get("source", {}).get("node_label", "unknown") if isinstance(message, dict) and isinstance(message.get("source"), dict) else "unknown", "master", "protocol_error", message.get("request_id", "unknown") if isinstance(message, dict) else "unknown", reason)
+                    if isinstance(message, dict):
+                        with write_lock:
+                            send_msg(conn, build_protocol_error_message(message, master_identity, reason))
                     continue
 
                 msg_type = message["type"]
