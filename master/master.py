@@ -4,6 +4,7 @@ import json
 import socket
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Dict
@@ -67,22 +68,37 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
 
 
 def build_ack_message(request_message: dict, status: str, master_identity: Dict[str, object]) -> dict:
-    origin = {
-        "uuid": request_message["origin"]["uuid"],
-        "label": request_message["origin"]["label"],
+    source = request_message["source"]
+    payload = request_message.get("payload", {}) if isinstance(request_message.get("payload", {}), dict) else {}
+    worker_identity = {
+        "group_label": source["group_label"],
+        "node_id": source["node_id"],
+        "node_label": source["node_label"],
+        "node_role": source["node_role"],
     }
     return {
+        "version": "sd_2026_2_v1",
         "type": "registration_ack",
-        "msg_id": "ack-" + request_message["msg_id"],
+        "message_id": "ack-" + str(uuid.uuid4()),
         "request_id": request_message["request_id"],
-        "origin": {"uuid": str(master_identity["node_id"]), "label": str(master_identity["node_label"])},
-        "timestamp": request_message["timestamp"],
+        "timestamp_ms": int(time.time() * 1000),
+        "source": {
+            "group_label": str(master_identity["group_label"]),
+            "node_id": str(master_identity["node_id"]),
+            "node_label": str(master_identity["node_label"]),
+            "node_role": str(master_identity["node_role"]),
+        },
+        "destination": {
+            "group_label": source["group_label"],
+            "node_id": source["node_id"],
+            "node_label": source["node_label"],
+            "node_role": source["node_role"],
+        },
         "payload": {
             "status": status,
-            "worker": {
-                "uuid": origin["uuid"],
-                "label": origin["label"],
-            },
+            "worker": worker_identity,
+            "host": payload.get("host"),
+            "port": payload.get("port"),
         },
     }
 
@@ -102,29 +118,29 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                 msg_type = message["type"]
                 request_id = message["request_id"]
-                origin = message["origin"]
+                source = message["source"]
 
                 if msg_type == "register_worker":
                     payload = message.get("payload", {})
                     if not isinstance(payload, dict):
-                        log_event("ASD", origin["label"], "master", msg_type, request_id, "discarded")
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "discarded")
                         continue
 
                     worker_record = {
-                        "uuid": origin["uuid"],
-                        "label": origin["label"],
+                        "uuid": source["node_id"],
+                        "label": source["node_label"],
                         "host": payload.get("host", "127.0.0.1"),
                         "port": payload.get("port", 0),
                     }
                     registry.upsert_worker(worker_record)
-                    log_event("ASD", origin["label"], "master", msg_type, request_id, "registered")
+                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
 
                     ack = build_ack_message(message, "accepted", master_identity)
                     send_msg(conn, ack)
-                    log_event("ASD", "master", origin["label"], ack["type"], request_id, "sent")
+                    log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
 
                 else:
-                    log_event("ASD", origin["label"], "master", msg_type, request_id, "ignored")
+                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
     except ConnectionResetError:
         pass
     finally:

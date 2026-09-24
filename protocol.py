@@ -1,19 +1,51 @@
 import json
 import socket
+import uuid
 from typing import Any, List
 
 REQUIRED_MESSAGE_FIELDS = (
+    "version",
     "type",
-    "msg_id",
+    "message_id",
     "request_id",
-    "origin",
-    "timestamp",
+    "timestamp_ms",
+    "source",
+    "destination",
     "payload",
+)
+
+REQUIRED_NODE_FIELDS = (
+    "group_label",
+    "node_id",
+    "node_label",
+    "node_role",
 )
 
 
 def log_event(group: str, origin: str, destination: str, msg_type: str, request_id: str, result: str) -> None:
     print(f"{group} | {origin} | {destination} | {msg_type} | {request_id} | {result}")
+
+
+def _validate_node_identity(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+
+    for field in REQUIRED_NODE_FIELDS:
+        if field not in node or not isinstance(node[field], str) or not node[field].strip():
+            return False
+
+    try:
+        parsed_uuid = uuid.UUID(node["node_id"])
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+    if parsed_uuid.version != 4:
+        return False
+
+    if node["node_role"] not in {"master", "worker"}:
+        return False
+
+    return True
 
 
 def validate_message(message: Any) -> bool:
@@ -24,16 +56,21 @@ def validate_message(message: Any) -> bool:
         if field not in message:
             return False
 
-    for field in ("type", "msg_id", "request_id", "timestamp"):
+    if message["version"] != "sd_2026_2_v1":
+        return False
+
+    for field in ("type", "message_id", "request_id"):
         if not isinstance(message[field], str) or not message[field].strip():
             return False
 
-    origin = message["origin"]
-    if not isinstance(origin, dict):
+    if not isinstance(message["timestamp_ms"], int) or isinstance(message["timestamp_ms"], bool):
         return False
-    if not isinstance(origin.get("uuid"), str) or not origin["uuid"].strip():
+    if message["timestamp_ms"] <= 0:
         return False
-    if not isinstance(origin.get("label"), str) or not origin["label"].strip():
+
+    if not _validate_node_identity(message["source"]):
+        return False
+    if not _validate_node_identity(message["destination"]):
         return False
 
     if message["payload"] is None:
@@ -69,11 +106,11 @@ def extract_complete_messages(buffer: bytearray) -> List[dict]:
             continue
 
         if not validate_message(payload):
-            origin = payload.get("origin", {}) if isinstance(payload, dict) else {}
-            origin_label = origin.get("label", "unknown") if isinstance(origin, dict) else "unknown"
+            source = payload.get("source", {}) if isinstance(payload, dict) else {}
+            source_label = source.get("node_label", "unknown") if isinstance(source, dict) else "unknown"
             msg_type = payload.get("type", "invalid_message") if isinstance(payload, dict) else "invalid_message"
             request_id = payload.get("request_id", "unknown") if isinstance(payload, dict) else "unknown"
-            log_event("ASD", origin_label, "unknown", msg_type, request_id, "discarded")
+            log_event("ASD", source_label, "unknown", msg_type, request_id, "discarded")
             continue
 
         messages.append(payload)

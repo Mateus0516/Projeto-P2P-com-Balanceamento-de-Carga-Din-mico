@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from master.master import load_or_create_config as load_master_config
+from master.master import build_ack_message, load_or_create_config as load_master_config
 from protocol import MasterRegistry, extract_complete_messages, validate_message
 from worker.worker import load_or_create_config as load_worker_config
 
@@ -10,27 +10,63 @@ def test_extract_complete_messages_handles_fragmentation_and_coalescence():
     buffer = bytearray()
     messages = [
         {
+            "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "msg_id": "m1",
+            "message_id": "m1",
             "request_id": "r1",
-            "origin": {"uuid": "u-1", "label": "worker-a"},
-            "timestamp": "2026-09-17T10:00:00Z",
+            "timestamp_ms": 1727170000123,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "worker-a",
+                "node_role": "worker",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "master",
+                "node_role": "master",
+            },
             "payload": {"status": "online"},
         },
         {
+            "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "msg_id": "m2",
+            "message_id": "m2",
             "request_id": "r2",
-            "origin": {"uuid": "u-2", "label": "worker-b"},
-            "timestamp": "2026-09-17T10:00:01Z",
+            "timestamp_ms": 1727170002234,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "worker-b",
+                "node_role": "worker",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "master",
+                "node_role": "master",
+            },
             "payload": {"status": "online"},
         },
         {
+            "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "msg_id": "m3",
+            "message_id": "m3",
             "request_id": "r3",
-            "origin": {"uuid": "u-3", "label": "worker-c"},
-            "timestamp": "2026-09-17T10:00:02Z",
+            "timestamp_ms": 1727170003456,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "worker-c",
+                "node_role": "worker",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "master",
+                "node_role": "master",
+            },
             "payload": {"status": "online"},
         },
     ]
@@ -57,21 +93,39 @@ def test_extract_complete_messages_handles_fragmentation_and_coalescence():
         received.extend(extract_complete_messages(buffer))
 
     assert len(received) == 3
-    assert received[0]["msg_id"] == "m1"
-    assert received[1]["msg_id"] == "m2"
-    assert received[2]["msg_id"] == "m3"
+    assert received[0]["message_id"] == "m1"
+    assert received[1]["message_id"] == "m2"
+    assert received[2]["message_id"] == "m3"
 
 
 def test_validate_message_rejects_missing_required_fields():
-    invalid = {"type": "register_worker", "msg_id": "m1", "timestamp": "2026-09-17T10:00:00Z"}
+    invalid = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "m1",
+        "request_id": "r1",
+        "timestamp_ms": 1727170000123,
+    }
     assert validate_message(invalid) is False
 
     valid = {
+        "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "msg_id": "m1",
+        "message_id": "m1",
         "request_id": "r1",
-        "origin": {"uuid": "abc-123", "label": "worker-a"},
-        "timestamp": "2026-09-17T10:00:00Z",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
         "payload": {"status": "online"},
     }
     assert validate_message(valid) is True
@@ -117,3 +171,68 @@ def test_config_identity_is_persistent_and_v4_for_master_and_worker(tmp_path):
     worker_again = load_worker_config(worker_path)
     assert master_again["node_id"] == master_config["node_id"]
     assert worker_again["node_id"] == worker_config["node_id"]
+
+
+def test_validate_message_accepts_sd_2026_2_v1_envelope():
+    master_uuid = str(uuid.uuid4())
+    worker_uuid = str(uuid.uuid4())
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-001",
+        "request_id": "req-001",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": worker_uuid,
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": master_uuid,
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+
+    assert validate_message(message) is True
+
+
+def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
+    request = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-req",
+        "request_id": "req-ack",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {"host": "127.0.0.1", "port": 9101},
+    }
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    ack = build_ack_message(request, "accepted", master_identity)
+
+    assert ack["version"] == "sd_2026_2_v1"
+    assert ack["request_id"] == request["request_id"]
+    assert ack["message_id"] != request["message_id"]
+    assert ack["source"]["node_role"] == "master"
+    assert ack["destination"]["node_role"] == "worker"
+    assert ack["payload"]["status"] == "accepted"

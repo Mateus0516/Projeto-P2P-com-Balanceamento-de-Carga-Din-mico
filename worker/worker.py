@@ -67,18 +67,50 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
     return normalized
 
 
+def load_master_identity() -> Dict[str, object]:
+    master_config_path = Path(__file__).resolve().parent.parent / "master" / "config.json"
+    if not master_config_path.exists():
+        return {
+            "group_label": "p2p-cluster",
+            "node_id": "00000000-0000-4000-8000-000000000000",
+            "node_label": "master",
+            "node_role": "master",
+        }
+
+    with master_config_path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    return {
+        "group_label": str(data.get("group_label", "p2p-cluster")),
+        "node_id": str(data.get("node_id", "00000000-0000-4000-8000-000000000000")),
+        "node_label": str(data.get("node_label", "master")),
+        "node_role": str(data.get("node_role", "master")),
+    }
+
+
 def register_worker(master_host: str, master_port: int, config: Dict[str, object]) -> None:
     node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
+    node_role = str(config.get("node_role", "worker"))
+    master_identity = load_master_identity()
     message = {
+        "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "msg_id": f"register-{uuid.uuid4()}",
+        "message_id": f"register-{uuid.uuid4()}",
         "request_id": f"req-{uuid.uuid4()}",
-        "origin": {
-            "uuid": node_id,
-            "label": node_label,
+        "timestamp_ms": int(time.time() * 1000),
+        "source": {
+            "group_label": str(config.get("group_label", "p2p-cluster")),
+            "node_id": node_id,
+            "node_label": node_label,
+            "node_role": node_role,
         },
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "destination": {
+            "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+            "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+            "node_label": str(master_identity.get("node_label", "master")),
+            "node_role": str(master_identity.get("node_role", "master")),
+        },
         "payload": {
             "host": config["host"],
             "port": config["port"],
@@ -124,7 +156,7 @@ def run_listener(host: str, port: int, worker_label: str) -> None:
                     continue
                 for msg in messages:
                     if validate_message(msg):
-                        log_event("ASD", msg["origin"]["label"], worker_label, msg["type"], msg["request_id"], "received")
+                        log_event("ASD", msg["source"]["node_label"], worker_label, msg["type"], msg["request_id"], "received")
         except ConnectionResetError:
             pass
         finally:
