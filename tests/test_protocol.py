@@ -34,6 +34,23 @@ from worker.worker import (
 )
 
 
+def build_register_payload(master_identity: dict, host: str, port: int, assignment_epoch: int = 0, loan_id: str | None = None) -> dict:
+    return {
+        "home_master": {
+            "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+            "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+            "node_label": str(master_identity.get("node_label", "master")),
+            "node_role": "master",
+            "host": str(master_identity.get("host", "127.0.0.1")),
+            "port": int(master_identity.get("port", 9000)),
+        },
+        "assignment_epoch": int(assignment_epoch),
+        "loan_id": None if loan_id is None else str(loan_id),
+        "host": str(host),
+        "port": int(port),
+    }
+
+
 def test_worker_load_or_create_config_keeps_distinct_persistent_identities(tmp_path):
     a_path = tmp_path / "worker-a.json"
     b_path = tmp_path / "worker-b.json"
@@ -275,7 +292,13 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9106},
+        "payload": build_register_payload(
+            {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000},
+            "127.0.0.1",
+            9106,
+            assignment_epoch=1,
+            loan_id="loan-valid-after-invalid",
+        ),
     }
 
     valid_reply = exchange(valid_message)
@@ -307,7 +330,7 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
                 "node_label": "master",
                 "node_role": "master",
             },
-            "payload": {"status": "online"},
+            "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": str(uuid.uuid4()), "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9101, assignment_epoch=1, loan_id="loan-m1"),
         },
         {
             "version": "sd_2026_2_v1",
@@ -327,7 +350,7 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
                 "node_label": "master",
                 "node_role": "master",
             },
-            "payload": {"status": "online"},
+            "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": str(uuid.uuid4()), "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9102, assignment_epoch=1, loan_id="loan-m2"),
         },
         {
             "version": "sd_2026_2_v1",
@@ -347,7 +370,7 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
                 "node_label": "master",
                 "node_role": "master",
             },
-            "payload": {"status": "online"},
+            "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": str(uuid.uuid4()), "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9103, assignment_epoch=1, loan_id="loan-m3"),
         },
     ]
 
@@ -408,7 +431,7 @@ def test_validate_message_rejects_missing_required_fields():
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"status": "online"},
+        "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9101, assignment_epoch=1, loan_id="loan-valid"),
     }
     assert validate_message(valid) is True
 
@@ -439,7 +462,7 @@ def test_extract_complete_messages_rejects_duplicate_keys_and_non_finite_numbers
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9101},
+        "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9101, assignment_epoch=1, loan_id="loan-dup"),
     }
 
     duplicate = (
@@ -480,7 +503,7 @@ def test_extract_complete_messages_rejects_messages_over_65536_bytes():
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9101, "blob": "x" * 70000},
+        "payload": {**build_register_payload({"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9101, assignment_epoch=1, loan_id="loan-big"), "blob": "x" * 70000},
     }
 
     payload = (json.dumps(valid_message, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
@@ -629,10 +652,91 @@ def test_validate_message_accepts_sd_2026_2_v1_envelope():
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9101},
+        "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": master_uuid, "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9101, assignment_epoch=1, loan_id="loan-valid-envelope"),
     }
 
     assert validate_message(message) is True
+
+
+def test_register_worker_payload_requires_home_master_assignment_and_loan_id(tmp_path):
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    def exchange(message):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        send_msg(client_sock, message)
+        try:
+            raw = client_sock.recv(4096)
+        finally:
+            client_sock.close()
+        return json.loads(raw.decode("utf-8").strip())
+
+    worker_config = load_worker_config(tmp_path / "worker-a.json")
+    valid_request = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-contract-valid",
+        "request_id": "req-contract-valid",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": worker_config["node_id"],
+            "node_label": worker_config["node_label"],
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": master_identity["node_id"],
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "home_master": {
+                "group_label": master_identity["group_label"],
+                "node_id": master_identity["node_id"],
+                "node_label": master_identity["node_label"],
+                "node_role": "master",
+                "host": "127.0.0.1",
+                "port": 9000,
+            },
+            "assignment_epoch": 0,
+            "loan_id": None,
+            "host": worker_config["host"],
+            "port": worker_config["port"],
+        },
+    }
+
+    valid_reply = exchange(valid_request)
+    assert valid_reply["type"] == "registration_ack"
+    assert valid_reply["payload"]["status"] == "accepted"
+    assert valid_reply["payload"]["assignment_epoch"] == 0
+    assert valid_reply["payload"]["worker"]["node_label"] == "worker-a"
+
+    invalid_request = dict(valid_request)
+    invalid_request["payload"] = {
+        "home_master": {
+            "group_label": master_identity["group_label"],
+            "node_id": master_identity["node_id"],
+            "node_label": master_identity["node_label"],
+            "node_role": "master",
+            "host": "127.0.0.1",
+            "port": 9000,
+        },
+        "loan_id": "loan-invalid",
+        "host": worker_config["host"],
+        "port": worker_config["port"],
+    }
+    invalid_reply = exchange(invalid_request)
+    assert invalid_reply["type"] == "protocol_error"
+    assert "assignment_epoch" in invalid_reply["payload"]["reason"].lower()
 
 
 def test_register_worker_rejects_group_label_mismatch_and_master_stays_operational():
@@ -675,7 +779,7 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9105},
+        "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9105, assignment_epoch=1, loan_id="loan-reject"),
     }
 
     rejected_reply = register_once(rejected_request)
@@ -701,7 +805,7 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
             "node_label": "master",
             "node_role": "master",
         },
-        "payload": {"host": "127.0.0.1", "port": 9106},
+        "payload": build_register_payload({"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "127.0.0.1", 9106, assignment_epoch=1, loan_id="loan-accept"),
     }
 
     accepted_reply = register_once(accepted_request)

@@ -7,6 +7,8 @@
   "port": 9102,
   "uuid": "5b0bbd11-d7f4-4b1d-9645-72742b1d09ec",
   "label": "worker-b",
+  "assignment_epoch": 0,
+  "loan_id": null,
   "master": {
     "group_label": "p2p-cluster",
     "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",

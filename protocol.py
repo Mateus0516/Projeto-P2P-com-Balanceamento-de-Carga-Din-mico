@@ -65,6 +65,45 @@ def _validate_node_identity(node: Any) -> bool:
     return True
 
 
+def validate_register_worker_payload(payload: Any) -> tuple[bool, str | None]:
+    if not isinstance(payload, dict):
+        return False, "invalid payload"
+
+    required_fields = ("home_master", "assignment_epoch", "loan_id", "host", "port")
+    missing = [field for field in required_fields if field not in payload]
+    if missing:
+        return False, f"missing required field(s): {', '.join(missing)}"
+
+    home_master = payload.get("home_master")
+    if not isinstance(home_master, dict) or not _validate_node_identity(home_master):
+        return False, "home_master must be a valid node identity"
+    if home_master.get("node_role") != "master":
+        return False, "home_master must identify the master"
+
+    assignment_epoch = payload.get("assignment_epoch")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        return False, "assignment_epoch must be a non-negative integer"
+
+    loan_id = payload.get("loan_id")
+    if loan_id is None:
+        pass
+    elif isinstance(loan_id, str):
+        if not loan_id.strip():
+            return False, "loan_id must be null or a non-empty string"
+    else:
+        return False, "loan_id must be null or a non-empty string"
+
+    host = payload.get("host")
+    if not isinstance(host, str) or not host.strip():
+        return False, "host must be a non-empty string"
+
+    port = payload.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or not (1 <= port <= 65535):
+        return False, "port must be an integer between 1 and 65535"
+
+    return True, None
+
+
 def validate_message(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
@@ -96,6 +135,11 @@ def validate_message(message: Any) -> bool:
     payload = message["payload"]
     if payload is None:
         return False
+
+    if message["type"] == "register_worker":
+        ok, _ = validate_register_worker_payload(payload)
+        if not ok:
+            return False
 
     if message["type"] in {"heartbeat", "heartbeat_ack"}:
         if not isinstance(payload, dict):
@@ -197,6 +241,12 @@ def classify_protocol_error(message: dict) -> str:
     if "version" in message and isinstance(message["version"], str):
         if message["version"] != "sd_2026_2_v1":
             return f"unknown protocol version: {message['version']}"
+
+    if message.get("type") == "register_worker":
+        payload = message.get("payload")
+        ok, reason = validate_register_worker_payload(payload)
+        if not ok:
+            return reason or "invalid register_worker payload"
 
     return "invalid protocol envelope"
 

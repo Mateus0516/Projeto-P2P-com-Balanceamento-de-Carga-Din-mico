@@ -23,6 +23,7 @@ from protocol import (
     recv_msgs,
     send_msg,
     validate_message,
+    validate_register_worker_payload,
 )
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -91,6 +92,7 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
         "worker": worker_identity,
         "host": payload.get("host"),
         "port": payload.get("port"),
+        "assignment_epoch": int(payload.get("assignment_epoch", 1)),
     }
     if reason is not None:
         ack_payload["reason"] = reason
@@ -229,8 +231,30 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             send_msg(conn, build_ack_message(message, "rejected", master_identity, reason="invalid payload"))
                         continue
 
+                    ok, reason = validate_register_worker_payload(payload)
+                    if not ok:
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason or "invalid payload"))
+                        continue
+
+                    home_master = payload.get("home_master")
+                    if not isinstance(home_master, dict):
+                        reason = "home_master invalid"
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
+                        continue
+
                     if source.get("group_label") != master_identity.get("group_label"):
                         reason = "group_label mismatch"
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
+                        continue
+
+                    if home_master.get("node_id") != master_identity.get("node_id") or home_master.get("node_label") != master_identity.get("node_label"):
+                        reason = "home_master mismatch"
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
                         with write_lock:
                             send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))

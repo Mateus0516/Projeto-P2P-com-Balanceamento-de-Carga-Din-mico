@@ -43,6 +43,28 @@ def _default_label_from_path(path: Path) -> str:
     return stem
 
 
+def _coerce_assignment_epoch(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.isdigit():
+            return max(0, int(stripped))
+    return 0
+
+
+def _coerce_loan_id(value: object, node_id: str, node_label: str) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+            return stripped
+    raise ValueError("loan_id must be null or a non-empty string")
+
+
 def _default_port_for_label(label: str, default_port: int = 9101) -> int:
     normalized = str(label).lower().replace("_", "-")
     if normalized.endswith("-b"):
@@ -103,6 +125,8 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
             default_host="127.0.0.1",
             default_port=inferred_port,
         )
+        config["assignment_epoch"] = _coerce_assignment_epoch(0)
+        config["loan_id"] = None
         config["master"] = _normalize_master_identity({"master": {}}, default_host="127.0.0.1", default_port=9000)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -118,6 +142,11 @@ def load_or_create_config(path: Path) -> Dict[str, object]:
         default_host="127.0.0.1",
         default_port=inferred_port,
     )
+    normalized["assignment_epoch"] = _coerce_assignment_epoch(data.get("assignment_epoch", 0))
+    if data.get("loan_id") is None:
+        normalized["loan_id"] = None
+    else:
+        normalized["loan_id"] = _coerce_loan_id(data.get("loan_id"), str(normalized["node_id"]), str(normalized["node_label"]))
     normalized["master"] = _normalize_master_identity({"master": data.get("master")}, default_host="127.0.0.1", default_port=9000)
     config_path.write_text(json.dumps(normalized, indent=2), encoding="utf-8")
     return normalized
@@ -353,6 +382,10 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     node_role = str(config.get("node_role", "worker"))
     master_identity = load_master_identity(config)
+    assignment_epoch = _coerce_assignment_epoch(config.get("assignment_epoch", 0))
+    loan_id = None if config.get("loan_id") is None else _coerce_loan_id(config.get("loan_id"), node_id, node_label)
+    config["assignment_epoch"] = assignment_epoch
+    config["loan_id"] = loan_id
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
@@ -372,8 +405,18 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
             "node_role": str(master_identity.get("node_role", "master")),
         },
         "payload": {
-            "host": config["host"],
-            "port": config["port"],
+            "home_master": {
+                "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+                "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+                "node_label": str(master_identity.get("node_label", "master")),
+                "node_role": str(master_identity.get("node_role", "master")),
+                "host": str(master_identity.get("host", "127.0.0.1")),
+                "port": int(master_identity.get("port", 9000)),
+            },
+            "assignment_epoch": assignment_epoch,
+            "loan_id": loan_id,
+            "host": str(config.get("host", "127.0.0.1")),
+            "port": int(config.get("port", 9101)),
         },
     }
 
