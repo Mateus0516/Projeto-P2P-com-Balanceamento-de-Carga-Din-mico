@@ -103,8 +103,13 @@ class WorkerControlSession:
         self.buffer = bytearray()
         self._queue: "queue.Queue[dict]" = queue.Queue()
         self._closed = threading.Event()
+        self._close_callbacks = []
         self._reader = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader.start()
+
+    def add_close_callback(self, callback):
+        if callback is not None:
+            self._close_callbacks.append(callback)
 
     def is_closed(self) -> bool:
         return self._closed.is_set()
@@ -121,6 +126,8 @@ class WorkerControlSession:
             self.sock.close()
         except OSError:
             pass
+        for callback in list(self._close_callbacks):
+            callback(self)
 
     def _reader_loop(self) -> None:
         while not self._closed.is_set():
@@ -130,9 +137,11 @@ class WorkerControlSession:
                 self._mark_closed()
                 return
 
-            if not messages:
+            if messages is None:
                 self._mark_closed()
                 return
+            if not messages:
+                continue
 
             for message in messages:
                 if not validate_message(message):
@@ -178,9 +187,11 @@ class WorkerControlSession:
     def close(self) -> None:
         self._mark_closed()
 
-    def wait_for_message(self, *, types: set[str] | None = None, request_id: str | None = None, timeout: float = 5.0) -> dict:
+    def wait_for_message(self, *, types: set[str] | None = None, request_id: str | None = None, timeout: float = 5.0, stop_event: threading.Event | None = None) -> dict:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if stop_event is not None and stop_event.is_set():
+                raise TimeoutError(f"Session stopped while waiting for {request_id or types or 'any'}")
             try:
                 remaining = max(0.05, deadline - time.monotonic())
                 message = self._queue.get(timeout=remaining)
@@ -195,24 +206,116 @@ class WorkerControlSession:
 
         raise TimeoutError(f"No matching message received for {request_id or types or 'any'}")
 
-    def close(self) -> None:
-        self._closed.set()
+
+
+def compute_retry_delay(attempt_number: int) -> float:
+    if attempt_number <= 1:
+        return 0.5
+    return min(0.5 * (2 ** (attempt_number - 1)), 5.0)
+
+
+class WorkerSessionManager:
+    def __init__(self, master_host: str, master_port: int, config: Dict[str, object], stop_event: threading.Event | None = None, retry_delay_factory=None):
+        self.master_host = master_host
+        self.master_port = master_port
+        self.config = config
+        self.stop_event = stop_event or threading.Event()
+        self.retry_delay_factory = retry_delay_factory or compute_retry_delay
+        self._lock = threading.RLock()
+        self._current_session: WorkerControlSession | None = None
+        self._current_heartbeat_thread: threading.Thread | None = None
+        self._loop_thread: threading.Thread | None = None
+
+    @property
+    def current_session(self) -> WorkerControlSession | None:
+        with self._lock:
+            return self._current_session
+
+    def _handle_session_closed(self, session: WorkerControlSession) -> None:
+        with self._lock:
+            if self._current_session is session:
+                self._current_session = None
+        log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "session", "-", "lost")
+
+    def _set_session(self, session: WorkerControlSession | None) -> None:
+        with self._lock:
+            previous = self._current_session
+            if previous is not None and previous is not session:
+                previous.close()
+            self._current_session = session
+            if session is not None and self._handle_session_closed not in session._close_callbacks:
+                session.add_close_callback(self._handle_session_closed)
+
+    def _start_heartbeat_for_session(self, session: WorkerControlSession) -> None:
+        thread = start_heartbeat_loop(self.master_host, self.master_port, self.config, control_session=session)
+        with self._lock:
+            self._current_heartbeat_thread = thread
+
+    def _connect_and_register(self) -> WorkerControlSession | None:
+        if self.stop_event.is_set():
+            return None
         try:
-            self.sock.shutdown(socket.SHUT_RDWR)
+            session = open_control_session(self.master_host, self.master_port, timeout=1.0)
         except OSError:
-            pass
-        try:
-            self.sock.close()
-        except OSError:
-            pass
+            return None
+
+        accepted = register_worker(self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event)
+        if not accepted:
+            session.close()
+            return None
+        return session
+
+    def _run_reconnect_loop(self) -> None:
+        attempt = 0
+        while not self.stop_event.is_set():
+            session = self._connect_and_register()
+            if session is None:
+                attempt += 1
+                delay = self.retry_delay_factory(attempt)
+                log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "reconnect", f"attempt-{attempt}", f"retrying in {delay:.2f}s")
+                if self.stop_event.wait(delay):
+                    break
+                continue
+
+            attempt = 0
+            self._set_session(session)
+            self._start_heartbeat_for_session(session)
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "reconnect", "-", "established")
+
+            while not self.stop_event.is_set():
+                if session.is_closed():
+                    with self._lock:
+                        if self._current_session is session:
+                            self._current_session = None
+                    break
+                self.stop_event.wait(0.1)
+
+    def start(self) -> threading.Thread | None:
+        if self.stop_event.is_set():
+            return None
+        if self._loop_thread is not None and self._loop_thread.is_alive():
+            return self._loop_thread
+        self._loop_thread = threading.Thread(target=self._run_reconnect_loop, daemon=True)
+        self._loop_thread.start()
+        return self._loop_thread
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        with self._lock:
+            session = self._current_session
+            if session is not None:
+                session.close()
+
+            self._current_session = None
 
 
 def open_control_session(master_host: str, master_port: int, timeout: float = 5.0) -> WorkerControlSession:
     sock = socket.create_connection((master_host, master_port), timeout=timeout)
+    sock.settimeout(None)
     return WorkerControlSession(sock)
 
 
-def register_worker(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession | None = None) -> None:
+def register_worker(master_host: str, master_port: int, config: Dict[str, object], control_session: WorkerControlSession | None = None, stop_event: threading.Event | None = None) -> bool:
     node_id = str(config.get("node_id", config.get("uuid", str(uuid.uuid4()))))
     node_label = str(config.get("node_label", config.get("label", "worker-a")))
     node_role = str(config.get("node_role", "worker"))
@@ -247,18 +350,19 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
         log_event("ASD", node_label, "master", message["type"], message["request_id"], "sent")
 
         try:
-            reply = session.wait_for_message(types={"registration_ack"}, request_id=message["request_id"], timeout=5)
+            reply = session.wait_for_message(types={"registration_ack"}, request_id=message["request_id"], timeout=5, stop_event=stop_event)
         except TimeoutError:
             log_event("ASD", node_label, "master", "registration_ack", message["request_id"], "timeout")
-            return
+            return False
 
         status = reply.get("payload", {}).get("status", "unknown")
         reason = reply.get("payload", {}).get("reason")
         if status == "accepted":
             log_event("ASD", node_label, "master", reply["type"], reply["request_id"], "accepted")
-            return
+            return True
 
         log_event("ASD", node_label, "master", reply["type"], reply["request_id"], f"rejected:{reason or 'unknown'}")
+        return False
     finally:
         if control_session is None:
             session.close()
@@ -326,6 +430,16 @@ def start_heartbeat_loop(master_host: str, master_port: int, config: Dict[str, o
     return thread
 
 
+def run_worker(master_host: str, master_port: int, config: Dict[str, object], stop_event: threading.Event | None = None, retry_delay_factory=None):
+    stop = stop_event or threading.Event()
+    manager = WorkerSessionManager(master_host, master_port, config, stop_event=stop, retry_delay_factory=retry_delay_factory)
+    manager.start()
+    while not stop.is_set():
+        time.sleep(0.1)
+    manager.stop()
+    return manager
+
+
 def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> None:
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -337,6 +451,8 @@ def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> No
         try:
             while True:
                 messages = recv_msgs(conn, buffer)
+                if messages is None:
+                    break
                 if not messages:
                     continue
                 for msg in messages:
@@ -380,8 +496,5 @@ if __name__ == "__main__":
     listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], worker_identity), daemon=True)
     listener_thread.start()
 
-    control_session = open_control_session(args.master_host, args.master_port)
-    register_worker(args.master_host, args.master_port, config, control_session=control_session)
-    start_heartbeat_loop(args.master_host, args.master_port, config, control_session=control_session)
-    while True:
-        time.sleep(1)
+    stop_event = threading.Event()
+    run_worker(args.master_host, args.master_port, config, stop_event=stop_event)

@@ -192,14 +192,16 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
             try:
                 messages = recv_msgs(conn, buffer)
             except OSError:
+                if current_worker_identity is not None:
+                    registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
+                break
+
+            if messages is None:
+                if current_worker_identity is not None:
+                    registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
                 break
 
             if not messages:
-                idle_reads += 1
-                if idle_reads >= 3:
-                    if current_worker_identity is not None:
-                        registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
-                    break
                 continue
 
             idle_reads = 0

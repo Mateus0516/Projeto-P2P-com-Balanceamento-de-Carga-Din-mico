@@ -186,14 +186,14 @@ def send_msg(sock: socket.socket, message: dict) -> None:
     sock.sendall(encoded)
 
 
-def recv_msgs(sock: socket.socket, buffer: bytearray) -> List[dict]:
+def recv_msgs(sock: socket.socket, buffer: bytearray) -> List[dict] | None:
     try:
         chunk = sock.recv(4096)
     except socket.timeout:
         return []
 
     if not chunk:
-        return []
+        return None
 
     buffer.extend(chunk)
     return extract_complete_messages(buffer)

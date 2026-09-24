@@ -1,6 +1,7 @@
 import json
 import socket
 import threading
+import time
 import uuid
 
 from master.master import (
@@ -18,7 +19,16 @@ from protocol import (
     send_msg,
     validate_message,
 )
-from worker.worker import WorkerControlSession, load_or_create_config as load_worker_config, start_heartbeat_loop
+from worker.worker import (
+    WorkerControlSession,
+    WorkerSessionManager,
+    compute_retry_delay,
+    load_or_create_config as load_worker_config,
+    open_control_session,
+    register_worker,
+    run_worker,
+    start_heartbeat_loop,
+)
 
 
 def test_extract_complete_messages_handles_fragmentation_and_coalescence():
@@ -789,6 +799,357 @@ def test_handle_client_closes_session_without_infinite_loop_when_peer_disconnect
     thread.join(timeout=1)
 
     assert not thread.is_alive()
+
+
+def test_worker_compute_retry_delay_grows_and_caps_at_five_seconds():
+    assert compute_retry_delay(1) == 0.5
+    assert compute_retry_delay(2) == 1.0
+    assert compute_retry_delay(3) == 2.0
+    assert compute_retry_delay(4) == 4.0
+    assert compute_retry_delay(5) == 5.0
+    assert compute_retry_delay(6) == 5.0
+
+
+def test_worker_session_stays_open_when_master_remains_healthy():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "worker-f",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9106,
+    }
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    port = listener.getsockname()[1]
+    stats = {"connects": 0, "registers": 0}
+    stop_server = threading.Event()
+
+    def server_loop():
+        try:
+            while not stop_server.is_set():
+                conn, _ = listener.accept()
+                stats["connects"] += 1
+                buffer = bytearray()
+                while not stop_server.is_set():
+                    data = conn.recv(4096)
+                    if not data:
+                        break
+                    buffer.extend(data)
+                    messages = extract_complete_messages(buffer)
+                    for message in messages:
+                        if message["type"] == "register_worker":
+                            stats["registers"] += 1
+                            send_msg(conn, build_ack_message(message, "accepted", master_identity))
+                        elif message["type"] == "heartbeat":
+                            send_msg(conn, build_heartbeat_ack_message(message, source=master_identity, destination=message["source"]))
+                conn.close()
+        except OSError:
+            pass
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+
+    stop_event = threading.Event()
+    manager = WorkerSessionManager("127.0.0.1", port, config, stop_event=stop_event, retry_delay_factory=lambda attempt: 0.05)
+    manager.start()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+
+    manager.stop(); stop_server.set(); listener.close(); time.sleep(0.2)
+
+    assert stats["connects"] == 1
+    assert stats["registers"] == 1
+
+
+def test_worker_run_worker_reconnects_after_master_restart():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    port = listener.getsockname()[1]
+    attempts = {"count": 0}
+
+    def server_loop():
+        while attempts["count"] < 2:
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                break
+            attempts["count"] += 1
+            buffer = bytearray()
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                buffer.extend(data)
+                messages = extract_complete_messages(buffer)
+                if messages:
+                    send_msg(conn, build_ack_message(messages[0], "accepted", master_identity))
+                    break
+            conn.close()
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+
+    stop_event = threading.Event()
+    thread = threading.Thread(target=run_worker, args=("127.0.0.1", port, config, stop_event), daemon=True)
+    thread.start()
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if attempts["count"] >= 2:
+            break
+        time.sleep(0.05)
+
+    stop_event.set()
+    thread.join(timeout=2)
+    listener.close()
+
+    assert attempts["count"] >= 2
+    assert config["node_id"] == "11111111-1111-4111-8111-111111111111"
+
+
+def test_worker_session_stays_open_for_fragmented_ndjson_and_real_eof_only():
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    heartbeat = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=77,
+        request_id="req-hb-fragment-77",
+    )
+
+    fragment = (json.dumps(heartbeat, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")[:20]
+    server_sock.sendall(fragment)
+    time.sleep(0.1)
+    assert not session.is_closed()
+
+    server_sock.sendall((json.dumps(heartbeat, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")[20:])
+    ack = build_heartbeat_ack_message(heartbeat, source=heartbeat["destination"], destination=heartbeat["source"])
+    server_sock.sendall((json.dumps(ack, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
+
+    response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-fragment-77", timeout=2)
+    assert response["payload"]["status"] == "alive"
+    assert not session.is_closed()
+
+    session.close()
+    server_sock.close()
+
+
+def test_worker_session_manager_reuses_same_node_id_after_reconnect():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    port = listener.getsockname()[1]
+
+    def server_loop():
+        for _ in range(2):
+            try:
+                conn, _ = listener.accept()
+            except OSError:
+                break
+            buffer = bytearray()
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    break
+                buffer.extend(data)
+                if not buffer:
+                    break
+                messages = extract_complete_messages(buffer)
+                if messages:
+                    msg = messages[0]
+                    send_msg(conn, build_ack_message(msg, "accepted", master_identity))
+                    break
+            conn.close()
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+
+    session_one = open_control_session("127.0.0.1", port, timeout=1.0)
+    assert register_worker("127.0.0.1", port, config, control_session=session_one) is True
+
+    session_two = open_control_session("127.0.0.1", port, timeout=1.0)
+    assert register_worker("127.0.0.1", port, config, control_session=session_two) is True
+
+    session_one.close(); session_two.close(); listener.close()
+
+
+def test_worker_reconnect_loop_retries_after_connection_failure():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-b",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+    }
+    stop_event = threading.Event()
+    manager = WorkerSessionManager("127.0.0.1", 1, config, stop_event=stop_event, retry_delay_factory=lambda attempt: 0.01)
+    assert manager._connect_and_register() is None
+    assert compute_retry_delay(1) == 0.5
+    assert compute_retry_delay(5) == 5.0
+
+
+def test_worker_reconnect_rejected_registration_does_not_resume_session():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "44444444-4444-4444-8444-444444444444",
+        "node_label": "worker-c",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9103,
+    }
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    port = listener.getsockname()[1]
+
+    def server_loop():
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        buffer = bytearray()
+        while True:
+            data = conn.recv(4096)
+            if not data:
+                break
+            buffer.extend(data)
+            if not buffer:
+                break
+            messages = extract_complete_messages(buffer)
+            if messages:
+                send_msg(conn, build_ack_message(messages[0], "rejected", master_identity, reason="duplicate node_label"))
+                break
+        conn.close()
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+
+    session = open_control_session("127.0.0.1", port, timeout=1.0)
+    assert register_worker("127.0.0.1", port, config, control_session=session) is False
+    listener.close()
+
+
+def test_worker_session_manager_stops_when_explicitly_stopped():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "55555555-5555-4555-8555-555555555555",
+        "node_label": "worker-d",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9104,
+    }
+    stop_event = threading.Event()
+    stop_event.set()
+    manager = WorkerSessionManager("127.0.0.1", 1, config, stop_event=stop_event, retry_delay_factory=lambda _: 0.01)
+    assert manager.start() is None
+
+
+def test_worker_heartbeat_resumes_after_reconnect():
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "66666666-6666-4666-8666-666666666666",
+        "node_label": "worker-e",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9105,
+    }
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)
+    port = listener.getsockname()[1]
+
+    def server_loop():
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        buffer = bytearray()
+        while True:
+            data = conn.recv(4096)
+            if not data:
+                break
+            buffer.extend(data)
+            if not buffer:
+                break
+            messages = extract_complete_messages(buffer)
+            if messages:
+                send_msg(conn, build_ack_message(messages[0], "accepted", {
+                    "group_label": "p2p-cluster",
+                    "node_id": "22222222-2222-4222-8222-222222222222",
+                    "node_label": "master",
+                    "node_role": "master",
+                }))
+                break
+        conn.close()
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+    session = open_control_session("127.0.0.1", port, timeout=1.0)
+    assert register_worker("127.0.0.1", port, config, control_session=session) is True
+    session.close()
+    listener.close()
 
 
 def test_worker_send_on_closed_socket_does_not_raise_or_traceback(capsys):
