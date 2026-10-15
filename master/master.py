@@ -352,6 +352,92 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
             pass
 
 
+class MasterTaskQueue:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._tasks: Dict[str, Dict[str, object]] = {}
+        self._order: list[str] = []
+        self._next_label_index = 1
+
+    def _next_task_label(self) -> str:
+        label = f"task-{self._next_label_index:04d}"
+        self._next_label_index += 1
+        return label
+
+    def _canonical_task(self, task: Dict[str, object]) -> str:
+        return json.dumps(task, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def submit(self, task: Dict[str, object]) -> Dict[str, object]:
+        if not isinstance(task, dict):
+            raise ValueError("task payload must be a dict")
+
+        task_id = str(task.get("task_id", "")).strip()
+        if not task_id:
+            raise ValueError("task_id is required")
+
+        payload_signature = self._canonical_task(task)
+        with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is not None:
+                if existing["payload_signature"] == payload_signature:
+                    return dict(existing["decision"])
+                return {
+                    "task_id": task_id,
+                    "task_label": existing["task_label"],
+                    "accepted": False,
+                    "reason": "task_id conflict",
+                }
+
+            task_label = self._next_task_label()
+            decision = {
+                "task_id": task_id,
+                "task_label": task_label,
+                "accepted": True,
+                "reason": "queued",
+            }
+            record = {
+                "task_id": task_id,
+                "task_kind": task.get("task_kind"),
+                "parameters": task.get("parameters", {}),
+                "task_label": task_label,
+                "status": "accepted",
+                "accepted": True,
+                "reason": "queued",
+                "payload_signature": payload_signature,
+                "attempts": {},
+                "decision": dict(decision),
+            }
+            self._tasks[task_id] = record
+            self._order.append(task_id)
+            return dict(decision)
+
+    def pending(self) -> list[Dict[str, object]]:
+        with self._lock:
+            return [dict(self._tasks[task_id]) for task_id in self._order]
+
+    def get_task(self, task_id: str) -> Dict[str, object] | None:
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return None
+            return dict(record)
+
+    def register_attempt(self, task_id: str, attempt_id: str, metadata: Dict[str, object] | None = None) -> Dict[str, object]:
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                raise KeyError(f"unknown task_id: {task_id}")
+            attempt_record = {"attempt_id": attempt_id, "status": "pending"}
+            if metadata:
+                attempt_record.update(metadata)
+            record["attempts"][attempt_id] = attempt_record
+            return dict(attempt_record)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._tasks)
+
+
 def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None:
     registry = MasterRegistry()
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

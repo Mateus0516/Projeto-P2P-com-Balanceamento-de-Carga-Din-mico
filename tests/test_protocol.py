@@ -244,6 +244,82 @@ def test_task_submit_range_limits_and_sprint1_compatibility():
     assert validate_message(heartbeat) is True
 
 
+def test_master_task_queue_fifo_and_stable_labels():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    task_a = {"task_id": "task-a", "task_kind": "sum_range", "parameters": {"start": 0, "end": 10}}
+    task_b = {"task_id": "task-b", "task_kind": "sum_range", "parameters": {"start": 11, "end": 20}}
+
+    decision_a = queue.submit(task_a)
+    decision_b = queue.submit(task_b)
+
+    assert decision_a["accepted"] is True
+    assert decision_b["accepted"] is True
+    assert decision_a["task_label"] == "task-0001"
+    assert decision_b["task_label"] == "task-0002"
+    assert [record["task_id"] for record in queue.pending()] == ["task-a", "task-b"]
+
+
+def test_master_task_queue_rejects_duplicate_content_and_conflicting_same_id():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    task_a = {"task_id": "task-repeat", "task_kind": "sum_range", "parameters": {"start": 1, "end": 2}}
+    task_a_same = {"task_id": "task-repeat", "task_kind": "sum_range", "parameters": {"start": 1, "end": 2}}
+    task_a_conflict = {"task_id": "task-repeat", "task_kind": "sum_range", "parameters": {"start": 1, "end": 3}}
+
+    first = queue.submit(task_a)
+    second = queue.submit(task_a_same)
+    conflict = queue.submit(task_a_conflict)
+
+    assert first["accepted"] is True
+    assert second["accepted"] is True
+    assert second["task_label"] == first["task_label"]
+    assert conflict["accepted"] is False
+    assert conflict["reason"] == "task_id conflict"
+    assert queue.get_task("task-repeat")["status"] == "accepted"
+
+
+def test_master_task_queue_is_thread_safe_for_parallel_submissions():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    submitted = []
+    barrier = threading.Barrier(8)
+
+    def worker(index):
+        barrier.wait()
+        payload = {"task_id": f"parallel-{index}", "task_kind": "sum_range", "parameters": {"start": index, "end": index + 1}}
+        decision = queue.submit(payload)
+        submitted.append(decision)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(queue.pending()) == 8
+    assert len({item["task_label"] for item in submitted}) == 8
+    assert len({item["task_id"] for item in submitted}) == 8
+
+
+def test_master_task_queue_keeps_task_attempt_structure_ready_for_retries():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    task = {"task_id": "task-retry", "task_kind": "sum_range", "parameters": {"start": 5, "end": 8}}
+    decision = queue.submit(task)
+
+    record = queue.get_task("task-retry")
+    assert record["task_id"] == "task-retry"
+    assert record["status"] == "accepted"
+    assert isinstance(record["attempts"], dict)
+    assert record["attempts"] == {}
+    assert decision["task_label"] == "task-0001"
+
+
 def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
     registry = MasterRegistry()
     worker_a = {
