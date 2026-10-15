@@ -104,6 +104,62 @@ def validate_register_worker_payload(payload: Any) -> tuple[bool, str | None]:
     return True, None
 
 
+def validate_task_submit_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("task_id", "task_kind", "parameters")
+    if any(field not in payload for field in required_fields):
+        return False
+
+    task_id = payload.get("task_id")
+    task_kind = payload.get("task_kind")
+    parameters = payload.get("parameters")
+
+    if not isinstance(task_id, str) or not task_id.strip():
+        return False
+    if task_kind != "sum_range":
+        return False
+    if not isinstance(parameters, dict):
+        return False
+
+    start = parameters.get("start")
+    end = parameters.get("end")
+    if not isinstance(start, int) or isinstance(start, bool):
+        return False
+    if not isinstance(end, int) or isinstance(end, bool):
+        return False
+    if not (0 <= start <= end <= 10000000):
+        return False
+
+    return True
+
+
+def validate_task_submit_ack_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("task_id", "task_label", "accepted", "reason")
+    if any(field not in payload for field in required_fields):
+        return False
+
+    task_id = payload.get("task_id")
+    task_label = payload.get("task_label")
+    accepted = payload.get("accepted")
+    reason = payload.get("reason")
+
+    if not isinstance(task_id, str) or not task_id.strip():
+        return False
+    if not isinstance(task_label, str) or not task_label.strip():
+        return False
+    if not isinstance(accepted, bool):
+        return False
+    if not isinstance(reason, str) or not reason.strip():
+        return False
+
+    return True
+
+
 def validate_message(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
@@ -115,7 +171,7 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
-    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error"}:
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack"}:
         return False
 
     for field in ("type", "message_id", "request_id"):
@@ -152,6 +208,14 @@ def validate_message(message: Any) -> bool:
             if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
                 return False
         if message["type"] == "heartbeat_ack" and payload.get("status") not in {"alive", "rejected"}:
+            return False
+
+    if message["type"] == "task_submit":
+        if not validate_task_submit_payload(payload):
+            return False
+
+    if message["type"] == "task_submit_ack":
+        if not validate_task_submit_ack_payload(payload):
             return False
 
     return True
@@ -241,7 +305,7 @@ def classify_protocol_error(message: dict) -> str:
         return "invalid field capitalization: use 'version' instead of 'Version'"
 
     if "type" in message and isinstance(message["type"], str):
-        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error"}:
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack"}:
             return f"unknown message type: {message['type']}"
 
     if "version" in message and isinstance(message["version"], str):

@@ -104,6 +104,146 @@ def test_master_registry_tracks_two_workers_separately_and_keeps_same_identity_a
     assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
 
 
+def test_valid_task_submit_message_is_accepted_by_protocol():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": "msg-task-submit-1",
+        "request_id": "req-task-submit-1",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "task_id": "task-001",
+            "task_kind": "sum_range",
+            "parameters": {"start": 0, "end": 10},
+        },
+    }
+    assert validate_message(message) is True
+
+
+def test_invalid_task_submit_message_is_rejected_by_protocol():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": "msg-task-submit-2",
+        "request_id": "req-task-submit-2",
+        "timestamp_ms": 1727170000124,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "task_id": "task-002",
+            "task_kind": "sum_range",
+            "parameters": {"start": 3, "end": 1},
+        },
+    }
+    assert validate_message(message) is False
+
+
+def test_task_submit_ack_message_matches_protocol_contract():
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit_ack",
+        "message_id": "msg-task-submit-ack-1",
+        "request_id": "req-task-submit-ack-1",
+        "timestamp_ms": 1727170000125,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "payload": {
+            "task_id": "task-001",
+            "task_label": "sum_range-task-001",
+            "accepted": True,
+            "reason": "queued",
+        },
+    }
+    assert validate_message(message) is True
+
+
+def test_task_submit_range_limits_and_sprint1_compatibility():
+    valid = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": "msg-task-submit-3",
+        "request_id": "req-task-submit-3",
+        "timestamp_ms": 1727170000126,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "task_id": "task-003",
+            "task_kind": "sum_range",
+            "parameters": {"start": 0, "end": 10000000},
+        },
+    }
+    invalid = {
+        **valid,
+        "payload": {
+            "task_id": "task-004",
+            "task_kind": "sum_range",
+            "parameters": {"start": -1, "end": 10},
+        },
+    }
+    heartbeat = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=5,
+        request_id="req-heartbeat-compat",
+    )
+
+    assert validate_message(valid) is True
+    assert validate_message(invalid) is False
+    assert validate_message(heartbeat) is True
+
+
 def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
     registry = MasterRegistry()
     worker_a = {
