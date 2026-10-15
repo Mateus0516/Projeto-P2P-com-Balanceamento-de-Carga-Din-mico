@@ -18,12 +18,14 @@ from protocol import (
     build_heartbeat_ack_message,
     build_heartbeat_message,
     build_protocol_error_message,
+    build_task_submit_ack_message,
     classify_protocol_error,
     log_event,
     recv_msgs,
     send_msg,
     validate_message,
     validate_register_worker_payload,
+    validate_task_submit_payload,
 )
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -183,12 +185,14 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
     return thread, stop_event
 
 
-def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object]) -> None:
+def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None) -> None:
     buffer = bytearray()
     write_lock = threading.Lock()
     session_stop = threading.Event()
     current_worker_identity = None
     current_worker_thread = None
+    if task_queue is None:
+        task_queue = MasterTaskQueue()
 
     try:
         conn.settimeout(1.0)
@@ -329,6 +333,40 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                                 pass
                             return
 
+                elif msg_type == "task_submit":
+                    payload = message.get("payload", {})
+                    if not isinstance(payload, dict) or not validate_task_submit_payload(payload):
+                        reason = "invalid task_submit payload"
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_protocol_error_message(message, master_identity, reason))
+                        continue
+
+                    decision = task_queue.submit(payload)
+                    ack = build_task_submit_ack_message(
+                        message,
+                        source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        },
+                        destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        },
+                        task_id=str(decision["task_id"]),
+                        task_label=str(decision["task_label"]),
+                        accepted=bool(decision["accepted"]),
+                        reason=str(decision["reason"]),
+                    )
+                    registry.remember_processed_message(message, ack)
+                    with write_lock:
+                        send_msg(conn, ack)
+                    log_event("ASD", "master", source["node_label"], "task_submit_ack", request_id, "sent")
+
                 else:
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
     except ConnectionResetError:
@@ -440,6 +478,7 @@ class MasterTaskQueue:
 
 def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None:
     registry = MasterRegistry()
+    task_queue = MasterTaskQueue()
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
@@ -449,7 +488,7 @@ def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None
     try:
         while True:
             conn, addr = server.accept()
-            threading.Thread(target=handle_client, args=(conn, addr, registry, master_identity), daemon=True).start()
+            threading.Thread(target=handle_client, args=(conn, addr, registry, master_identity, task_queue), daemon=True).start()
     except KeyboardInterrupt:
         pass
     finally:

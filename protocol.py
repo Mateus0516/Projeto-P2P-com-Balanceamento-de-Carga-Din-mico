@@ -221,6 +221,53 @@ def validate_message(message: Any) -> bool:
     return True
 
 
+def build_task_submit_message(source: dict, destination: dict, task: dict, request_id: str | None = None) -> dict:
+    if not isinstance(task, dict):
+        raise ValueError("task payload must be a dict")
+    if not validate_task_submit_payload(task):
+        raise ValueError("task payload does not match sum_range contract")
+
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": f"task-submit-{uuid.uuid4()}",
+        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": dict(task),
+    }
+
+
+def build_task_submit_ack_message(request_message: dict, source: dict, destination: dict, *, task_id: str, task_label: str, accepted: bool, reason: str) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task_id is required")
+    if not isinstance(task_label, str) or not task_label.strip():
+        raise ValueError("task_label is required")
+    if not isinstance(accepted, bool):
+        raise ValueError("accepted must be a bool")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("reason is required")
+
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit_ack",
+        "message_id": f"task-submit-ack-{uuid.uuid4()}",
+        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "task_id": str(task_id),
+            "task_label": str(task_label),
+            "accepted": bool(accepted),
+            "reason": str(reason),
+        },
+    }
+
+
 def build_heartbeat_message(source: dict, destination: dict, sequence: int, request_id: str | None = None, assignment_epoch: int = 0) -> dict:
     if not isinstance(sequence, int) or isinstance(sequence, bool):
         raise ValueError("heartbeat sequence must be an integer")

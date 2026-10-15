@@ -320,6 +320,239 @@ def test_master_task_queue_keeps_task_attempt_structure_ready_for_retries():
     assert decision["task_label"] == "task-0001"
 
 
+def test_client_builds_valid_task_submit_message_using_protocol_contract():
+    from protocol import build_task_submit_message, validate_message
+
+    message = build_task_submit_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "client-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        task={
+            "task_id": "client-task-001",
+            "task_kind": "sum_range",
+            "parameters": {"start": 3, "end": 9},
+        },
+        request_id="req-client-task-001",
+    )
+
+    assert validate_message(message) is True
+    assert message["payload"]["task_id"] == "client-task-001"
+    assert message["type"] == "task_submit"
+
+
+def test_client_submit_task_round_trip_and_ack_is_printable():
+    from client.client import TaskClient
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def handler():
+        conn, _ = server.accept()
+        try:
+            buffer = bytearray()
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                if b"\n" in buffer:
+                    break
+            payload = json.loads(buffer.decode("utf-8").strip())
+            assert payload["type"] == "task_submit"
+            ack = {
+                "version": "sd_2026_2_v1",
+                "type": "task_submit_ack",
+                "message_id": "msg-client-ack-1",
+                "request_id": payload["request_id"],
+                "timestamp_ms": 1727170000123,
+                "source": {
+                    "group_label": "p2p-cluster",
+                    "node_id": "22222222-2222-4222-8222-222222222222",
+                    "node_label": "master",
+                    "node_role": "master",
+                },
+                "destination": {
+                    "group_label": "p2p-cluster",
+                    "node_id": "11111111-1111-4111-8111-111111111111",
+                    "node_label": "client-a",
+                    "node_role": "worker",
+                },
+                "payload": {
+                    "task_id": payload["payload"]["task_id"],
+                    "task_label": "task-0001",
+                    "accepted": True,
+                    "reason": "queued",
+                },
+            }
+            conn.sendall((json.dumps(ack, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
+        finally:
+            conn.close()
+            server.close()
+
+    thread = threading.Thread(target=handler, daemon=True)
+    thread.start()
+
+    client = TaskClient(host="127.0.0.1", port=port, node_label="client-a")
+    ack = client.submit_task(task_id="client-task-002", start=1, end=7, timeout=3.0)
+
+    assert ack["payload"]["task_id"] == "client-task-002"
+    assert ack["payload"]["accepted"] is True
+    assert ack["payload"]["task_label"] == "task-0001"
+    assert ack["payload"]["reason"] == "queued"
+
+
+def test_master_handles_task_submit_round_trip_and_conflict_over_tcp():
+    from master.master import MasterTaskQueue
+
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    task_queue = MasterTaskQueue()
+
+    def exchange(message: dict):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity, task_queue), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        try:
+            send_msg(client_sock, message)
+            raw = client_sock.recv(4096)
+        finally:
+            client_sock.close()
+
+        if not raw:
+            return None
+        return json.loads(raw.decode("utf-8").strip())
+
+    task_payload = {
+        "task_id": "tcp-task-001",
+        "task_kind": "sum_range",
+        "parameters": {"start": 0, "end": 10},
+    }
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": "msg-task-submit-1",
+        "request_id": "req-task-submit-1",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": task_payload,
+    }
+    ack = exchange(message)
+    assert ack is not None
+    assert ack["type"] == "task_submit_ack"
+    assert ack["payload"]["task_id"] == "tcp-task-001"
+    assert ack["payload"]["accepted"] is True
+    assert ack["payload"]["task_label"] == "task-0001"
+    assert task_queue.pending()[0]["task_id"] == "tcp-task-001"
+
+    duplicate_ack = exchange(message)
+    assert duplicate_ack["payload"]["accepted"] is True
+    assert duplicate_ack["payload"]["task_label"] == ack["payload"]["task_label"]
+    assert len(task_queue.pending()) == 1
+
+    conflict_message = {
+        **message,
+        "message_id": "msg-task-submit-conflict",
+        "request_id": "req-task-submit-conflict",
+        "payload": {
+            "task_id": "tcp-task-001",
+            "task_kind": "sum_range",
+            "parameters": {"start": 0, "end": 20},
+        },
+    }
+    conflict_ack = exchange(conflict_message)
+    assert conflict_ack["type"] == "task_submit_ack"
+    assert conflict_ack["payload"]["accepted"] is False
+    assert conflict_ack["payload"]["reason"] == "task_id conflict"
+    assert task_queue.get_task("tcp-task-001")["task_label"] == "task-0001"
+
+
+def test_master_returns_protocol_error_for_invalid_task_submit_over_tcp():
+    from master.master import MasterTaskQueue
+
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    task_queue = MasterTaskQueue()
+
+    def exchange(message: dict):
+        server_sock, client_sock = socket.socketpair()
+        thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity, task_queue), daemon=True)
+        thread.start()
+        client_sock.settimeout(2)
+        try:
+            send_msg(client_sock, message)
+            raw = client_sock.recv(4096)
+        finally:
+            client_sock.close()
+
+        if not raw:
+            return None
+        return json.loads(raw.decode("utf-8").strip())
+
+    invalid = {
+        "version": "sd_2026_2_v1",
+        "type": "task_submit",
+        "message_id": "msg-task-submit-invalid",
+        "request_id": "req-task-submit-invalid",
+        "timestamp_ms": 1727170000123,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "task_id": "tcp-task-999",
+            "task_kind": "sum_range",
+            "parameters": {"start": 12, "end": 3},
+        },
+    }
+    reply = exchange(invalid)
+    assert reply is not None
+    assert reply["type"] == "protocol_error"
+    assert reply["payload"]["status"] == "error"
+    assert "reason" in reply["payload"]
+    assert len(task_queue.pending()) == 0
+
+
 def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
     registry = MasterRegistry()
     worker_a = {
