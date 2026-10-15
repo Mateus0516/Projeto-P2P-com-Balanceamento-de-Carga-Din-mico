@@ -1092,6 +1092,98 @@ def test_worker_session_manager_keeps_heartbeat_running_while_polling():
         client_sock.close()
 
 
+def test_worker_keeps_sending_heartbeats_while_running_sum_range(monkeypatch):
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9000,
+    }
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "assignment_epoch": 0,
+        "loan_id": None,
+        "master": {**master_identity},
+    }
+    queue = MasterTaskQueue()
+    queue.submit({"task_id": "task-heartbeat-busy", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    registry = MasterRegistry()
+    server_sock, client_sock = socket.socketpair()
+    client_sock.settimeout(2.0)
+    thread = threading.Thread(target=handle_client, args=(server_sock, ("127.0.0.1", 9000), registry, master_identity, queue), daemon=True)
+    thread.start()
+    session = WorkerControlSession(client_sock)
+    heartbeat_received = threading.Event()
+    original_send_with_retry = worker_module.send_with_retry
+
+    def tracking_send_with_retry(session_obj, message, *, expect_type, timeout=5.0, max_attempts=3):
+        reply = original_send_with_retry(session_obj, message, expect_type=expect_type, timeout=timeout, max_attempts=max_attempts)
+        if isinstance(message, dict) and message.get("type") == "heartbeat":
+            heartbeat_received.set()
+        return reply
+
+    original_start_heartbeat_loop = worker_module.start_heartbeat_loop
+
+    def fast_heartbeat_loop(*args, **kwargs):
+        kwargs["interval_seconds"] = 0.05
+        return original_start_heartbeat_loop(*args, **kwargs)
+
+    real_sum_range = worker_module.sum_range
+    slow_started = threading.Event()
+
+    def slow_sum_range(start: int, end: int) -> int:
+        slow_started.set()
+        assert heartbeat_received.wait(timeout=1.0), "heartbeat was not acknowledged before task completion"
+        return real_sum_range(start, end)
+
+    monkeypatch.setattr(worker_module, "send_with_retry", tracking_send_with_retry)
+    monkeypatch.setattr(worker_module, "start_heartbeat_loop", fast_heartbeat_loop)
+    monkeypatch.setattr(worker_module, "sum_range", slow_sum_range)
+
+    try:
+        assert register_worker("127.0.0.1", 9000, config, control_session=session, stop_event=None) is True
+
+        manager = WorkerSessionManager("127.0.0.1", 9000, config)
+        manager._set_session(session)
+        manager._start_heartbeat_for_session(session)
+
+        assert manager.request_task(session) is True
+        assignment = session.wait_for_message(types={"task_assignment"}, timeout=2.0)
+        assert assignment["type"] == "task_assignment"
+        assert assignment["payload"]["task_id"] == "task-heartbeat-busy"
+        assert manager.busy is False
+
+        manager.process_inbound_message(assignment)
+        assert manager.busy is True
+        assert manager.current_task is not None
+        assert slow_started.is_set()
+        assert heartbeat_received.wait(timeout=2.0), "at least one heartbeat should be acknowledged before the task completes"
+
+        task_ack = session.wait_for_message(types={"task_ack"}, timeout=2.0)
+        assert task_ack["type"] == "task_ack"
+        assert task_ack["payload"]["accepted"] is True
+        manager.process_inbound_message(task_ack)
+        assert manager.busy is False
+        assert manager.current_task is None
+
+        completed = queue.get_task("task-heartbeat-busy")
+        assert completed["status"] == "completed"
+        assert completed["result_payload"]["status"] == "ok"
+        assert completed["result_payload"]["result"]["sum"] == 15
+    finally:
+        session.close()
+        server_sock.close()
+        client_sock.close()
+
+
 def test_master_handles_task_submit_round_trip_and_conflict_over_tcp():
     from master.master import MasterTaskQueue
 
