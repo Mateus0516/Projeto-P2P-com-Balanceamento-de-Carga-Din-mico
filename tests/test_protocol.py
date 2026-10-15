@@ -354,7 +354,7 @@ def test_master_task_queue_rejects_duplicate_content_and_conflicting_same_id():
     assert second["task_label"] == first["task_label"]
     assert conflict["accepted"] is False
     assert conflict["reason"] == "task_id conflict"
-    assert queue.get_task("task-repeat")["status"] == "accepted"
+    assert queue.get_task("task-repeat")["status"] == "pending"
 
 
 def test_master_task_queue_returns_no_task_when_empty_and_allows_assignment_for_registered_worker():
@@ -373,7 +373,7 @@ def test_master_task_queue_returns_no_task_when_empty_and_allows_assignment_for_
     assert assigned["assignment_epoch"] == 1
     assert assigned["loan_id"] is None
     assert "attempt_id" in assigned
-    assert queue.get_task("task-assign-1")["status"] == "assigned"
+    assert queue.get_task("task-assign-1")["status"] == "running"
 
     second = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
     assert second is None
@@ -484,7 +484,7 @@ def test_master_task_request_returns_no_task_for_unregistered_worker_and_task_as
     assert registered_reply["payload"]["task_label"] == "task-0001"
     assert registered_reply["payload"]["assignment_epoch"] == 2
     assert registered_reply["payload"]["loan_id"] is None
-    assert task_queue.get_task("task-cycle-1")["status"] == "assigned"
+    assert task_queue.get_task("task-cycle-1")["status"] == "running"
 
 
 def test_master_task_queue_is_thread_safe_for_parallel_submissions():
@@ -511,6 +511,156 @@ def test_master_task_queue_is_thread_safe_for_parallel_submissions():
     assert len({item["task_id"] for item in submitted}) == 8
 
 
+def test_end_to_end_real_tcp_flow_submit_assign_result_and_ack():
+    from client.client import TaskClient
+    from master.master import MasterRegistry, MasterTaskQueue, handle_client
+
+    def reserve_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    master_port = reserve_port()
+    worker_a_port = reserve_port()
+    worker_b_port = reserve_port()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": master_port,
+    }
+    registry = MasterRegistry()
+    task_queue = MasterTaskQueue()
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", master_port))
+    server.listen(16)
+    server_stop = threading.Event()
+
+    def accept_loop() -> None:
+        server.settimeout(0.25)
+        try:
+            while not server_stop.is_set():
+                try:
+                    conn, addr = server.accept()
+                except socket.timeout:
+                    continue
+                threading.Thread(target=handle_client, args=(conn, addr, registry, master_identity, task_queue), daemon=True).start()
+        finally:
+            try:
+                server.close()
+            except OSError:
+                pass
+
+    accept_thread = threading.Thread(target=accept_loop, daemon=True)
+    accept_thread.start()
+
+    worker_a_stop = threading.Event()
+    worker_b_stop = threading.Event()
+    worker_a_cfg = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": worker_a_port,
+        "assignment_epoch": 0,
+        "loan_id": None,
+        "master": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+            "host": "127.0.0.1",
+            "port": master_port,
+        },
+    }
+    worker_b_cfg = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-b",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": worker_b_port,
+        "assignment_epoch": 0,
+        "loan_id": None,
+        "master": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+            "host": "127.0.0.1",
+            "port": master_port,
+        },
+    }
+
+    worker_a_thread = threading.Thread(target=run_worker, args=("127.0.0.1", master_port, worker_a_cfg), kwargs={"stop_event": worker_a_stop}, daemon=True)
+    worker_b_thread = threading.Thread(target=run_worker, args=("127.0.0.1", master_port, worker_b_cfg), kwargs={"stop_event": worker_b_stop}, daemon=True)
+    worker_a_thread.start()
+    worker_b_thread.start()
+
+    try:
+        deadline = time.time() + 10.0
+        while time.time() < deadline and len(registry.workers) < 2:
+            time.sleep(0.1)
+        assert len(registry.workers) >= 2
+
+        client = TaskClient(host="127.0.0.1", port=master_port, node_label="client-e2e", timeout=5.0)
+        ack = client.submit_task(task_id="e2e-task-001", start=1, end=100, timeout=3.0)
+        assert ack["payload"]["task_id"] == "e2e-task-001"
+        assert ack["payload"]["accepted"] is True
+        assert ack["payload"]["reason"] == "queued"
+
+        deadline = time.time() + 15.0
+        task_record = None
+        while time.time() < deadline:
+            task_record = task_queue.get_task("e2e-task-001")
+            if task_record is not None and task_record["status"] == "completed":
+                break
+            time.sleep(0.05)
+
+        assert task_record is not None
+        assert task_record["task_id"] == "e2e-task-001"
+        assert task_record["status"] == "completed"
+        assert task_record["result_status"] == "ok"
+        assert task_record["attempt_count"] == 1
+        assert task_record["last_attempt_id"] is not None
+        assert task_record["result_payload"]["status"] == "ok"
+        assert task_record["result_payload"]["result"] == {"sum": 5050}
+
+        assignment_records = [
+            item for item in task_queue.pending() if item["task_id"] == "e2e-task-001"
+        ]
+        assert len(assignment_records) == 1
+        assert assignment_records[0]["task_id"] == "e2e-task-001"
+    finally:
+        worker_a_stop.set()
+        worker_b_stop.set()
+        server_stop.set()
+        try:
+            worker_a_thread.join(timeout=3)
+        except RuntimeError:
+            pass
+        try:
+            worker_b_thread.join(timeout=3)
+        except RuntimeError:
+            pass
+        try:
+            accept_thread.join(timeout=3)
+        except RuntimeError:
+            pass
+        try:
+            server.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        try:
+            server.close()
+        except OSError:
+            pass
+
+
 def test_master_task_queue_keeps_task_attempt_structure_ready_for_retries():
     from master.master import MasterTaskQueue
 
@@ -520,7 +670,7 @@ def test_master_task_queue_keeps_task_attempt_structure_ready_for_retries():
 
     record = queue.get_task("task-retry")
     assert record["task_id"] == "task-retry"
-    assert record["status"] == "accepted"
+    assert record["status"] == "pending"
     assert isinstance(record["attempts"], dict)
     assert record["attempts"] == {}
     assert decision["task_label"] == "task-0001"
@@ -1268,6 +1418,57 @@ def test_worker_handles_two_consecutive_tasks():
     finally:
         server_sock.close()
         client_sock.close()
+
+
+def test_master_task_lifecycle_tracks_pending_and_running_states():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    decision = queue.submit({"task_id": "task-lifecycle-1", "task_kind": "sum_range", "parameters": {"start": 0, "end": 10}})
+    assert decision["accepted"] is True
+
+    task = queue.get_task("task-lifecycle-1")
+    assert task["status"] == "pending"
+    assert task["attempt_count"] == 0
+
+    assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert assignment is not None
+    assert assignment["task_id"] == "task-lifecycle-1"
+
+    task_after_assignment = queue.get_task("task-lifecycle-1")
+    assert task_after_assignment["status"] == "running"
+    assert task_after_assignment["assigned_to"] == "worker-a"
+    assert task_after_assignment["attempt_count"] == 1
+    assert task_after_assignment["last_attempt_id"] == assignment["attempt_id"]
+
+
+def test_master_reuses_attempt_id_for_same_retry_and_generates_new_one_for_new_assignment():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    queue.submit({"task_id": "task-attempt-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    first_attempt_id = first_assignment["attempt_id"]
+
+    second_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert second_assignment is None
+
+    queued = queue.get_task("task-attempt-1")
+    assert queued["attempt_count"] == 1
+    assert queued["last_attempt_id"] == first_attempt_id
+
+    queue.release_task("task-attempt-1", reason="retransmit")
+    retried = queue.claim_next_task("worker-a", assignment_epoch=2, loan_id=None)
+    assert retried is not None
+    assert retried["attempt_id"] == first_attempt_id
+
+    queue.release_task("task-attempt-1", reason="new_assignment")
+    next_assignment = queue.claim_next_task("worker-b", assignment_epoch=3, loan_id=None)
+    assert next_assignment is not None
+    assert next_assignment["attempt_id"] != first_attempt_id
+    assert queue.get_task("task-attempt-1")["attempt_count"] == 2
 
 
 def test_master_rejects_duplicate_task_result_and_counts_once():

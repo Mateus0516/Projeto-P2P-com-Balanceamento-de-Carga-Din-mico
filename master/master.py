@@ -572,11 +572,17 @@ class MasterTaskQueue:
                 "task_kind": task.get("task_kind"),
                 "parameters": task.get("parameters", {}),
                 "task_label": task_label,
-                "status": "accepted",
+                "status": "pending",
                 "accepted": True,
                 "reason": "queued",
                 "payload_signature": payload_signature,
                 "attempts": {},
+                "attempt_count": 0,
+                "last_attempt_id": None,
+                "last_assignment_epoch": None,
+                "assigned_to": None,
+                "loan_id": None,
+                "_reusable_attempt_id": None,
                 "decision": dict(decision),
             }
             self._tasks[task_id] = record
@@ -618,23 +624,31 @@ class MasterTaskQueue:
                 record = self._tasks.get(task_id)
                 if record is None:
                     continue
-                if record.get("status") == "assigned":
-                    continue
-                if record.get("status") == "completed":
+                if record.get("status") in {"running", "assigned", "completed", "failed"}:
                     continue
 
-                attempt_id = f"attempt-{uuid.uuid4()}"
-                record["status"] = "assigned"
+                reusable_attempt_id = record.get("_reusable_attempt_id")
+                if reusable_attempt_id is not None and reusable_attempt_id in record.get("attempts", {}):
+                    attempt_id = str(reusable_attempt_id)
+                    record["_reusable_attempt_id"] = None
+                else:
+                    attempt_id = f"attempt-{uuid.uuid4()}"
+                    record["attempt_count"] = int(record.get("attempt_count", 0)) + 1
+                    record["last_attempt_id"] = attempt_id
+
+                record["status"] = "running"
                 record["assigned_to"] = str(worker_id)
                 record["assignment_epoch"] = int(assignment_epoch)
+                record["last_assignment_epoch"] = int(assignment_epoch)
                 record["loan_id"] = loan_id
                 record["attempts"][attempt_id] = {
                     "attempt_id": attempt_id,
-                    "status": "assigned",
+                    "status": "running",
                     "worker_id": str(worker_id),
                     "assignment_epoch": int(assignment_epoch),
                     "loan_id": loan_id,
                 }
+                record["last_attempt_id"] = attempt_id
 
                 return {
                     "task_id": str(record["task_id"]),
@@ -648,6 +662,32 @@ class MasterTaskQueue:
 
             return None
 
+    def release_task(self, task_id: str, *, reason: str | None = None, attempt_id: str | None = None) -> bool:
+        if not isinstance(task_id, str) or not task_id.strip():
+            return False
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return False
+
+            if attempt_id is not None:
+                record["_reusable_attempt_id"] = str(attempt_id)
+            elif reason == "retransmit" and record.get("last_attempt_id") is not None:
+                record["_reusable_attempt_id"] = str(record["last_attempt_id"])
+            else:
+                record["_reusable_attempt_id"] = None
+
+            record["status"] = "pending"
+            record["assigned_to"] = None
+            record["loan_id"] = None
+            record["release_reason"] = reason or "released"
+            if attempt_id is not None and attempt_id in record.get("attempts", {}):
+                record["attempts"][attempt_id]["status"] = "pending"
+            elif record.get("last_attempt_id") is not None and record["last_attempt_id"] in record.get("attempts", {}):
+                record["attempts"][record["last_attempt_id"]]["status"] = "pending"
+            return True
+
     def complete_task(self, task_id: str, attempt_id: str, *, accepted: bool, reason: str, payload: Dict[str, object] | None = None) -> tuple[bool, str]:
         if not isinstance(task_id, str) or not task_id.strip():
             return False, "invalid task_id"
@@ -659,22 +699,27 @@ class MasterTaskQueue:
             if record is None:
                 return False, "unknown task"
 
-            if record.get("status") == "completed":
+            if record.get("status") in {"completed", "failed"}:
                 return False, "duplicate result"
 
             attempts = record.get("attempts", {})
             if attempt_id not in attempts:
                 return False, "attempt not found"
 
-            record["status"] = "completed"
-            record["completed"] = True
-            record["completed_at"] = int(time.time() * 1000)
-            record["result_payload"] = payload or {}
-            record["attempts"][attempt_id]["status"] = "completed"
             if accepted:
+                record["status"] = "completed"
+                record["completed"] = True
+                record["completed_at"] = int(time.time() * 1000)
                 record["result_status"] = "ok"
+                record["result_payload"] = payload or {}
+                record["attempts"][attempt_id]["status"] = "completed"
                 return True, reason or "completed"
+
+            record["status"] = "failed"
+            record["completed"] = False
             record["result_status"] = "rejected"
+            record["result_payload"] = payload or {}
+            record["attempts"][attempt_id]["status"] = "failed"
             return False, reason or "duplicate result"
 
     def __len__(self) -> int:
