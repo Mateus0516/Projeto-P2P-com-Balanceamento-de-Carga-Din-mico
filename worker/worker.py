@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 from protocol import (
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_task_request_message,
     log_event,
     recv_msgs,
     send_msg,
@@ -296,7 +297,11 @@ class WorkerSessionManager:
         self._lock = threading.RLock()
         self._current_session: WorkerControlSession | None = None
         self._current_heartbeat_thread: threading.Thread | None = None
+        self._task_polling_thread: threading.Thread | None = None
         self._loop_thread: threading.Thread | None = None
+        self.busy = False
+        self.current_task: Dict[str, object] | None = None
+        self.next_task_ready_at = 0.0
 
     @property
     def current_session(self) -> WorkerControlSession | None:
@@ -322,6 +327,114 @@ class WorkerSessionManager:
         thread = start_heartbeat_loop(self.master_host, self.master_port, self.config, control_session=session)
         with self._lock:
             self._current_heartbeat_thread = thread
+
+    def _set_task_polling_thread(self, thread: threading.Thread | None) -> None:
+        with self._lock:
+            self._task_polling_thread = thread
+
+    def should_poll_for_task(self) -> bool:
+        if self.busy:
+            return False
+        if self.current_session is None or self.current_session.is_closed():
+            return False
+        return time.monotonic() >= self.next_task_ready_at
+
+    def request_task(self, session: WorkerControlSession | None = None) -> bool:
+        if session is None:
+            session = self.current_session
+        if session is None or session.is_closed():
+            return False
+        if self.busy:
+            return False
+        if time.monotonic() < self.next_task_ready_at:
+            return False
+
+        master_identity = load_master_identity(self.config)
+        assignment_epoch = _coerce_assignment_epoch(self.config.get("assignment_epoch", 0))
+        loan_id = None if self.config.get("loan_id") is None else _coerce_loan_id(self.config.get("loan_id"), str(self.config.get("node_id", "")), str(self.config.get("node_label", "worker-a")))
+        message = build_task_request_message(
+            source={
+                "group_label": str(self.config.get("group_label", "p2p-cluster")),
+                "node_id": str(self.config.get("node_id", self.config.get("uuid", str(uuid.uuid4())))),
+                "node_label": str(self.config.get("node_label", self.config.get("label", "worker-a"))),
+                "node_role": str(self.config.get("node_role", "worker")),
+            },
+            destination={
+                "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+                "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
+                "node_label": str(master_identity.get("node_label", "master")),
+                "node_role": str(master_identity.get("node_role", "master")),
+            },
+            assignment_epoch=assignment_epoch,
+            loan_id=loan_id,
+        )
+        session.send_message(message)
+        log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_request", message["request_id"], "sent")
+        return True
+
+    def process_inbound_message(self, message: dict) -> bool:
+        if not isinstance(message, dict) or not validate_message(message):
+            return False
+
+        msg_type = message.get("type")
+        if msg_type == "task_assignment":
+            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+            if not payload:
+                return False
+            self.busy = True
+            self.current_task = {
+                "task_id": str(payload.get("task_id", "")),
+                "task_label": str(payload.get("task_label", "")),
+                "attempt_id": str(payload.get("attempt_id", "")),
+                "task_kind": payload.get("task_kind"),
+                "parameters": dict(payload.get("parameters", {})),
+                "assignment_epoch": int(payload.get("assignment_epoch", 0)),
+                "loan_id": payload.get("loan_id"),
+            }
+            self.config["assignment_epoch"] = int(payload.get("assignment_epoch", self.config.get("assignment_epoch", 0)))
+            self.config["loan_id"] = payload.get("loan_id")
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_assignment", message.get("request_id", "unknown"), "received")
+            return True
+
+        if msg_type == "no_task":
+            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+            retry_after_ms = int(payload.get("retry_after_ms", 1000))
+            self.next_task_ready_at = time.monotonic() + max(0.0, retry_after_ms / 1000.0)
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "no_task", message.get("request_id", "unknown"), f"retry_after_ms={retry_after_ms}")
+            return True
+
+        return False
+
+    def start_task_polling_loop(self, session: WorkerControlSession | None = None, interval_seconds: float = 0.5) -> threading.Thread | None:
+        if session is None:
+            session = self.current_session
+        if session is None or session.is_closed():
+            return None
+
+        def loop() -> None:
+            while not self.stop_event.is_set() and not session.is_closed():
+                if self.busy:
+                    if self.stop_event.wait(interval_seconds):
+                        break
+                    continue
+
+                if time.monotonic() < self.next_task_ready_at:
+                    remaining = max(0.05, self.next_task_ready_at - time.monotonic())
+                    if self.stop_event.wait(min(interval_seconds, remaining)):
+                        break
+                    continue
+
+                self.request_task(session)
+                try:
+                    message = session.wait_for_message(types={"task_assignment", "no_task"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
+                except TimeoutError:
+                    continue
+                self.process_inbound_message(message)
+
+        thread = threading.Thread(target=loop, daemon=True)
+        thread.start()
+        self._set_task_polling_thread(thread)
+        return thread
 
     def _connect_and_register(self) -> WorkerControlSession | None:
         if self.stop_event.is_set():
@@ -352,6 +465,7 @@ class WorkerSessionManager:
             attempt = 0
             self._set_session(session)
             self._start_heartbeat_for_session(session)
+            self.start_task_polling_loop(session)
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "reconnect", "-", "established")
 
             while not self.stop_event.is_set():
@@ -379,6 +493,7 @@ class WorkerSessionManager:
                 session.close()
 
             self._current_session = None
+            self.busy = False
 
 
 def open_control_session(master_host: str, master_port: int, timeout: float = 5.0) -> WorkerControlSession:

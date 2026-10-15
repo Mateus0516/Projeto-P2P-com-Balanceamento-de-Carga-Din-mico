@@ -17,14 +17,19 @@ from protocol import (
     MasterRegistry,
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_no_task_message,
     build_protocol_error_message,
+    build_task_assignment_message,
     build_task_submit_ack_message,
     classify_protocol_error,
     log_event,
     recv_msgs,
     send_msg,
     validate_message,
+    validate_no_task_payload,
     validate_register_worker_payload,
+    validate_task_assignment_payload,
+    validate_task_request_payload,
     validate_task_submit_payload,
 )
 
@@ -367,6 +372,77 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], "task_submit_ack", request_id, "sent")
 
+                elif msg_type == "task_request":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if not isinstance(payload, dict) or not validate_task_request_payload(payload):
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_protocol_error_message(message, master_identity, "invalid task_request payload"))
+                        continue
+
+                    worker = registry.get_worker(source["node_id"])
+                    if worker is None or worker.get("status") not in {"available", "suspect"}:
+                        no_task = build_no_task_message(message, source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        }, destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        }, retry_after_ms=1000)
+                        with write_lock:
+                            send_msg(conn, no_task)
+                        log_event("ASD", "master", source["node_label"], "no_task", request_id, "sent")
+                        continue
+
+                    assignment = task_queue.claim_next_task(source["node_id"], assignment_epoch=int(payload.get("assignment_epoch", 0)), loan_id=payload.get("loan_id"))
+                    if assignment is None:
+                        no_task = build_no_task_message(message, source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        }, destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        }, retry_after_ms=1000)
+                        with write_lock:
+                            send_msg(conn, no_task)
+                        log_event("ASD", "master", source["node_label"], "no_task", request_id, "sent")
+                        continue
+
+                    assignment_message = build_task_assignment_message(
+                        message,
+                        source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        },
+                        destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        },
+                        task_id=str(assignment["task_id"]),
+                        task_label=str(assignment["task_label"]),
+                        attempt_id=str(assignment["attempt_id"]),
+                        task_kind=str(assignment["task_kind"]),
+                        parameters=dict(assignment["parameters"]),
+                        assignment_epoch=int(assignment["assignment_epoch"]),
+                        loan_id=assignment["loan_id"],
+                    )
+                    registry.remember_processed_message(message, assignment_message)
+                    with write_lock:
+                        send_msg(conn, assignment_message)
+                    log_event("ASD", "master", source["node_label"], "task_assignment", request_id, "sent")
+
                 else:
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
     except ConnectionResetError:
@@ -470,6 +546,47 @@ class MasterTaskQueue:
                 attempt_record.update(metadata)
             record["attempts"][attempt_id] = attempt_record
             return dict(attempt_record)
+
+    def claim_next_task(self, worker_id: str, *, assignment_epoch: int, loan_id: str | None = None) -> Dict[str, object] | None:
+        if not isinstance(worker_id, str) or not worker_id.strip():
+            raise ValueError("worker_id is required")
+        if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+            raise ValueError("assignment_epoch must be a non-negative integer")
+        if loan_id is not None and (not isinstance(loan_id, str) or not loan_id.strip()):
+            raise ValueError("loan_id must be null or a non-empty string")
+
+        with self._lock:
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                if record.get("status") == "assigned":
+                    continue
+
+                attempt_id = f"attempt-{uuid.uuid4()}"
+                record["status"] = "assigned"
+                record["assigned_to"] = str(worker_id)
+                record["assignment_epoch"] = int(assignment_epoch)
+                record["loan_id"] = loan_id
+                record["attempts"][attempt_id] = {
+                    "attempt_id": attempt_id,
+                    "status": "assigned",
+                    "worker_id": str(worker_id),
+                    "assignment_epoch": int(assignment_epoch),
+                    "loan_id": loan_id,
+                }
+
+                return {
+                    "task_id": str(record["task_id"]),
+                    "task_label": str(record["task_label"]),
+                    "attempt_id": attempt_id,
+                    "task_kind": record.get("task_kind"),
+                    "parameters": dict(record.get("parameters", {})),
+                    "assignment_epoch": int(assignment_epoch),
+                    "loan_id": loan_id,
+                }
+
+            return None
 
     def __len__(self) -> int:
         with self._lock:
