@@ -1663,57 +1663,50 @@ def test_master_marks_task_failed_after_max_attempts_are_exhausted():
     assert queued["failed_reason"] == "max_task_attempts_exceeded"
 
 
-def test_master_rejects_duplicate_task_result_and_counts_once():
+def test_master_accepts_duplicate_task_result_for_same_attempt_and_does_not_count_twice():
     from master.master import MasterTaskQueue
 
-    registry = MasterRegistry()
-    master_identity = {
-        "group_label": "p2p-cluster",
-        "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master",
-        "node_role": "master",
-    }
     queue = MasterTaskQueue()
     queue.submit({"task_id": "task-dup-1", "task_kind": "sum_range", "parameters": {"start": 0, "end": 10}})
     assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
-    result = {
-        "version": "sd_2026_2_v1",
-        "type": "task_result",
-        "message_id": "msg-task-result-dup-a",
-        "request_id": "req-task-result-dup-a",
-        "timestamp_ms": 1727170000129,
-        "source": {
-            "group_label": "p2p-cluster",
-            "node_id": "11111111-1111-4111-8111-111111111111",
-            "node_label": "worker-a",
-            "node_role": "worker",
-        },
-        "destination": {
-            "group_label": "p2p-cluster",
-            "node_id": "22222222-2222-4222-8222-222222222222",
-            "node_label": "master",
-            "node_role": "master",
-        },
-        "payload": {
-            "task_id": "task-dup-1",
-            "task_label": assignment["task_label"],
-            "attempt_id": assignment["attempt_id"],
-            "assignment_epoch": 1,
-            "loan_id": None,
-            "status": "ok",
-            "result": {"sum": 55},
-            "error_code": None,
-        },
-    }
+    assert assignment is not None
 
-    ack = handle_client.__globals__["build_task_ack_message"](result, source=master_identity, destination=result["source"], task_id="task-dup-1", attempt_id=assignment["attempt_id"], accepted=True, reason="completed")
-    assert ack["payload"]["accepted"] is True
+    accepted, reason = queue.complete_task("task-dup-1", assignment["attempt_id"], accepted=True, reason="completed", payload={"result": {"sum": 55}})
+    assert accepted is True
+    assert reason == "completed"
     assert queue.get_task("task-dup-1")["status"] == "completed"
 
-    duplicate = {**result, "message_id": "msg-task-result-dup-b", "request_id": "req-task-result-dup-b"}
-    duplicate_ack = handle_client.__globals__["build_task_ack_message"](duplicate, source=master_identity, destination=duplicate["source"], task_id="task-dup-1", attempt_id=assignment["attempt_id"], accepted=False, reason="duplicate result")
-    assert duplicate_ack["payload"]["accepted"] is False
-    assert duplicate_ack["payload"]["reason"] == "duplicate result"
+    duplicate_accepted, duplicate_reason = queue.complete_task("task-dup-1", assignment["attempt_id"], accepted=True, reason="completed", payload={"result": {"sum": 55}})
+    assert duplicate_accepted is True
+    assert duplicate_reason == "duplicate result"
+    current = queue.get_task("task-dup-1")
+    assert current["status"] == "completed"
+    assert current["result_payload"] == {"result": {"sum": 55}}
+
+
+def test_master_rejects_stale_attempt_result_after_reassignment():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-stale-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+
+    second_assignment = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second_assignment is not None
+    assert second_assignment["task_id"] == "task-stale-1"
+    assert second_assignment["attempt_id"] != first_assignment["attempt_id"]
+
+    stale_accepted, stale_reason = queue.complete_task("task-stale-1", first_assignment["attempt_id"], accepted=True, reason="completed", payload={"result": {"sum": 15}})
+    assert stale_accepted is False
+    assert stale_reason == "stale_attempt"
+
+    current = queue.get_task("task-stale-1")
+    assert current["status"] == "running"
+    assert current["assigned_to"] == "worker-b"
+    assert current["active_attempt_id"] == second_assignment["attempt_id"]
 
 
 def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():

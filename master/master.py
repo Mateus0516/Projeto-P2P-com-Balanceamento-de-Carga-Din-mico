@@ -844,12 +844,22 @@ class MasterTaskQueue:
             if record is None:
                 return False, "unknown task"
 
-            if record.get("status") in {"completed", "failed"}:
-                return False, "duplicate result"
-
             attempts = record.get("attempts", {})
+            current_active = record.get("active_attempt_id")
             if attempt_id not in attempts:
-                return False, "attempt not found"
+                return False, "stale_attempt"
+
+            if record.get("status") == "completed":
+                last_attempt = record.get("last_attempt_id")
+                if str(last_attempt) == str(attempt_id):
+                    return True, "duplicate result"
+                return False, "stale_attempt"
+
+            if record.get("status") == "failed":
+                return False, "stale_attempt"
+
+            if current_active is not None and str(current_active) != str(attempt_id):
+                return False, "stale_attempt"
 
             if accepted:
                 record["status"] = "completed"
@@ -873,7 +883,7 @@ class MasterTaskQueue:
             record["active_attempt_id"] = None
             record["running_since_ms"] = None
             record["attempts"][attempt_id]["status"] = "failed"
-            return False, reason or "duplicate result"
+            return False, reason or "rejected"
 
     def __len__(self) -> int:
         with self._lock:
