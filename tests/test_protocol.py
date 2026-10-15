@@ -2008,6 +2008,149 @@ def test_master_rejects_stale_attempt_result_after_reassignment():
     assert current["active_attempt_id"] == second_assignment["attempt_id"]
 
 
+def test_master_requeues_task_after_nok_result_and_keeps_same_identity():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-nok-1", "task_kind": "sum_range", "parameters": {"start": 10, "end": 3}})
+    assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert assignment is not None
+
+    accepted, reason = queue.complete_task(
+        "task-nok-1",
+        assignment["attempt_id"],
+        accepted=False,
+        reason="attempt_failed",
+        payload={
+            "task_id": "task-nok-1",
+            "task_label": assignment["task_label"],
+            "attempt_id": assignment["attempt_id"],
+            "assignment_epoch": 1,
+            "loan_id": None,
+            "status": "nok",
+            "result": None,
+            "error_code": "invalid_range",
+        },
+    )
+    assert accepted is True
+    assert reason == "attempt_failed"
+
+    current = queue.get_task("task-nok-1")
+    assert current["status"] == "pending"
+    assert current["assigned_to"] is None
+
+    retry = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert retry is not None
+    assert retry["task_id"] == "task-nok-1"
+    assert retry["task_label"] == assignment["task_label"]
+    assert retry["attempt_id"] != assignment["attempt_id"]
+
+
+def test_master_marks_task_failed_after_three_nok_attempts():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-nok-3", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first is not None
+    queue.complete_task(
+        "task-nok-3",
+        first["attempt_id"],
+        accepted=False,
+        reason="attempt_failed",
+        payload={
+            "task_id": "task-nok-3",
+            "task_label": first["task_label"],
+            "attempt_id": first["attempt_id"],
+            "assignment_epoch": 1,
+            "loan_id": None,
+            "status": "nok",
+            "result": None,
+            "error_code": "invalid_range",
+        },
+    )
+
+    second = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second is not None
+    queue.complete_task(
+        "task-nok-3",
+        second["attempt_id"],
+        accepted=False,
+        reason="attempt_failed",
+        payload={
+            "task_id": "task-nok-3",
+            "task_label": second["task_label"],
+            "attempt_id": second["attempt_id"],
+            "assignment_epoch": 2,
+            "loan_id": None,
+            "status": "nok",
+            "result": None,
+            "error_code": "invalid_range",
+        },
+    )
+
+    third = queue.claim_next_task("worker-c", assignment_epoch=3, loan_id=None)
+    assert third is not None
+    queue.complete_task(
+        "task-nok-3",
+        third["attempt_id"],
+        accepted=False,
+        reason="attempt_failed",
+        payload={
+            "task_id": "task-nok-3",
+            "task_label": third["task_label"],
+            "attempt_id": third["attempt_id"],
+            "assignment_epoch": 3,
+            "loan_id": None,
+            "status": "nok",
+            "result": None,
+            "error_code": "invalid_range",
+        },
+    )
+
+    failed = queue.get_task("task-nok-3")
+    assert failed["status"] == "failed"
+    assert failed["failed_reason"] == "max_task_attempts_exceeded"
+
+
+def test_master_rejects_stale_nok_result_after_reassignment():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-nok-stale", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first is not None
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+
+    second = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second is not None
+
+    stale_accepted, stale_reason = queue.complete_task(
+        "task-nok-stale",
+        first["attempt_id"],
+        accepted=False,
+        reason="attempt_failed",
+        payload={
+            "task_id": "task-nok-stale",
+            "task_label": first["task_label"],
+            "attempt_id": first["attempt_id"],
+            "assignment_epoch": 1,
+            "loan_id": None,
+            "status": "nok",
+            "result": None,
+            "error_code": "invalid_range",
+        },
+    )
+    assert stale_accepted is False
+    assert stale_reason == "stale_attempt"
+
+    current = queue.get_task("task-nok-stale")
+    assert current["status"] == "running"
+    assert current["active_attempt_id"] == second["attempt_id"]
+
+
 def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     registry = MasterRegistry()
     master_identity = {

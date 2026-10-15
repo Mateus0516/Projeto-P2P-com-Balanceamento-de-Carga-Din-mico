@@ -130,7 +130,7 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
 
 
 def build_task_ack_message(request_message: dict, source: dict, destination: dict, *, task_id: str, attempt_id: str, accepted: bool, reason: str) -> dict:
-    message = protocol_build_task_ack_message(
+    return protocol_build_task_ack_message(
         request_message,
         source=source,
         destination=destination,
@@ -139,13 +139,6 @@ def build_task_ack_message(request_message: dict, source: dict, destination: dic
         accepted=accepted,
         reason=reason,
     )
-
-    if accepted:
-        for obj in gc.get_objects():
-            if isinstance(obj, MasterTaskQueue):
-                obj.complete_task(task_id, attempt_id, accepted=True, reason=reason)
-
-    return message
 
 
 def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, sequence: int, request_id: str | None = None) -> dict:
@@ -431,7 +424,15 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                     task_id = str(payload.get("task_id"))
                     attempt_id = str(payload.get("attempt_id"))
-                    accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=True, reason="completed", payload=payload)
+                    result_status = str(payload.get("status") or "").lower()
+                    if result_status not in {"ok", "nok"}:
+                        result_status = "ok" if str(payload.get("result")) != "None" else "nok"
+
+                    if result_status == "ok":
+                        accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=True, reason="completed", payload=payload)
+                    else:
+                        accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=False, reason="attempt_failed", payload=payload)
+
                     ack = build_task_ack_message(
                         message,
                         source={
@@ -849,41 +850,68 @@ class MasterTaskQueue:
             if attempt_id not in attempts:
                 return False, "stale_attempt"
 
-            if record.get("status") == "completed":
-                last_attempt = record.get("last_attempt_id")
-                if str(last_attempt) == str(attempt_id):
-                    return True, "duplicate result"
-                return False, "stale_attempt"
+            attempt_record = attempts.get(attempt_id, {})
+            if bool(attempt_record.get("result_seen")):
+                return True, "duplicate result"
 
-            if record.get("status") == "failed":
+            if record.get("status") == "completed" and str(record.get("last_attempt_id")) == str(attempt_id):
+                return True, "duplicate result"
+
+            if record.get("status") == "failed" and str(record.get("last_attempt_id")) == str(attempt_id):
                 return False, "stale_attempt"
 
             if current_active is not None and str(current_active) != str(attempt_id):
                 return False, "stale_attempt"
 
-            if accepted:
+            payload_dict = dict(payload or {})
+            result_status = str(payload_dict.get("status") or "").lower()
+            if result_status not in {"ok", "nok"}:
+                result_status = "ok" if bool(accepted) and str(reason or "").lower() in {"completed", "ok"} else "nok"
+
+            if result_status == "ok":
                 record["status"] = "completed"
                 record["completed"] = True
                 record["completed_at"] = int(time.time() * 1000)
                 record["result_status"] = "ok"
-                record["result_payload"] = payload or {}
+                record["result_payload"] = payload_dict
                 record["assigned_to"] = None
                 record["loan_id"] = None
                 record["active_attempt_id"] = None
                 record["running_since_ms"] = None
                 record["attempts"][attempt_id]["status"] = "completed"
+                record["attempts"][attempt_id]["result_seen"] = True
+                record["attempts"][attempt_id]["result_status"] = "ok"
                 return True, reason or "completed"
 
-            record["status"] = "failed"
+            if int(record.get("attempt_count", 0)) >= int(record.get("max_task_attempts", self.max_task_attempts)):
+                record["status"] = "failed"
+                record["failed_reason"] = "max_task_attempts_exceeded"
+                record["failed_at_ms"] = int(time.time() * 1000)
+                record["completed"] = False
+                record["result_status"] = "nok"
+                record["result_payload"] = payload_dict
+                record["assigned_to"] = None
+                record["loan_id"] = None
+                record["active_attempt_id"] = None
+                record["running_since_ms"] = None
+                record["attempts"][attempt_id]["status"] = "failed"
+                record["attempts"][attempt_id]["result_seen"] = True
+                record["attempts"][attempt_id]["result_status"] = "nok"
+                return True, "attempt_failed"
+
+            record["status"] = "pending"
             record["completed"] = False
-            record["result_status"] = "rejected"
-            record["result_payload"] = payload or {}
+            record["result_status"] = "nok"
+            record["result_payload"] = payload_dict
             record["assigned_to"] = None
             record["loan_id"] = None
             record["active_attempt_id"] = None
             record["running_since_ms"] = None
+            record["failure_reason"] = "attempt_failed"
             record["attempts"][attempt_id]["status"] = "failed"
-            return False, reason or "rejected"
+            record["attempts"][attempt_id]["result_seen"] = True
+            record["attempts"][attempt_id]["result_status"] = "nok"
+            return True, "attempt_failed"
 
     def __len__(self) -> int:
         with self._lock:
