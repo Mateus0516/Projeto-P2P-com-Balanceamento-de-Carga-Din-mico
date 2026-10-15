@@ -74,7 +74,7 @@ def export_reports(metrics: Dict[str, Any], output_dir: str | Path, *, timestamp
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    stamp = str(timestamp) if timestamp is not None else datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = str(timestamp) if timestamp is not None else datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
 
     json_path = out_dir / f"metrics_{stamp}.json"
     json_path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -111,6 +111,15 @@ def export_reports(metrics: Dict[str, Any], output_dir: str | Path, *, timestamp
     return json_path, csv_path
 
 
+def collect_once(host: str, port: int, output_dir: str | Path, *, timeout: float = 5.0, request_id: str | None = None, collector_label: str = "collector", collector_identity: Dict[str, str] | None = None) -> Tuple[Path, Path]:
+    identity = default_collector_identity(collector_label) if collector_identity is None else collector_identity
+    metrics = request_metrics(host, port, timeout=timeout, request_id=request_id, collector_identity=identity)
+    json_path, csv_path = export_reports(metrics, output_dir)
+    print(json_path)
+    print(csv_path)
+    return json_path, csv_path
+
+
 def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect master metrics and export JSON/CSV reports.")
     parser.add_argument("--host", default="127.0.0.1", help="Master host to connect to")
@@ -119,14 +128,37 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--request-id", default=None, help="Optional request ID for the metrics request")
     parser.add_argument("--collector-label", default="collector", help="Collector label used in the request identity")
     parser.add_argument("--timeout", type=float, default=5.0, help="Timeout for the metrics request")
+    parser.add_argument("--interval-seconds", type=float, default=10.0, help="Seconds between scheduled metric collections; use --once to run only one collection")
+    parser.add_argument("--once", action="store_true", help="Collect metrics once and exit immediately")
     args = parser.parse_args(argv)
 
-    identity = default_collector_identity(args.collector_label)
-    metrics = request_metrics(args.host, args.port, timeout=args.timeout, request_id=args.request_id, collector_identity=identity)
-    json_path, csv_path = export_reports(metrics, args.output_dir)
-    print(json_path)
-    print(csv_path)
-    return 0
+    if args.interval_seconds <= 0:
+        parser.error("--interval-seconds must be greater than zero")
+
+    try:
+        if args.once:
+            collect_once(
+                args.host,
+                args.port,
+                args.output_dir,
+                timeout=args.timeout,
+                request_id=args.request_id,
+                collector_label=args.collector_label,
+            )
+            return 0
+
+        while True:
+            collect_once(
+                args.host,
+                args.port,
+                args.output_dir,
+                timeout=args.timeout,
+                request_id=args.request_id,
+                collector_label=args.collector_label,
+            )
+            time.sleep(args.interval_seconds)
+    except KeyboardInterrupt:
+        return 0
 
 
 if __name__ == "__main__":

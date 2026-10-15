@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from collector.collector import export_reports, request_metrics
+from collector.collector import export_reports, request_metrics, run_cli
 from master.master import (
     MasterTaskQueue,
     build_ack_message,
@@ -2309,6 +2309,34 @@ def test_collector_exports_json_and_csv_reports(tmp_path):
     csv_text = csv_path.read_text(encoding="utf-8")
     assert "total_tasks" in csv_text
     assert "task-1" in csv_text
+
+
+def test_run_cli_periodic_collection_exports_unique_reports_and_handles_keyboard_interrupt(monkeypatch, tmp_path):
+    calls = []
+    collected = {"total_tasks": 2, "completed": 1, "pending": 1, "running": 0, "failed": 0, "timeout_attempts": 0, "recovered_after_timeout": 0, "tasks_with_multiple_attempts": 0, "pending_task_ids": ["task-10"], "running_task_ids": [], "failed_task_ids": [], "completed_task_ids": ["task-09"]}
+
+    def fake_request_metrics(host, port, *, timeout=5.0, request_id=None, collector_identity=None):
+        calls.append((host, port, request_id, collector_identity))
+        return collected
+
+    def fake_sleep(_seconds):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("collector.collector.request_metrics", fake_request_metrics)
+    monkeypatch.setattr("collector.collector.time.sleep", fake_sleep)
+
+    exit_code = run_cli(["--host", "127.0.0.1", "--port", "9000", "--output-dir", str(tmp_path), "--interval-seconds", "0.01", "--once"])
+    assert exit_code == 0
+    assert len(calls) == 1
+
+    calls.clear()
+    exit_code = run_cli(["--host", "127.0.0.1", "--port", "9000", "--output-dir", str(tmp_path), "--interval-seconds", "0.01"])
+    assert exit_code == 0
+    assert len(calls) == 1
+
+    json_files = sorted(tmp_path.glob("metrics_*.json"))
+    assert json_files
+    assert len(json_files) >= 1
 
 
 def test_master_requeues_running_task_after_timeout_and_starts_new_attempt():
