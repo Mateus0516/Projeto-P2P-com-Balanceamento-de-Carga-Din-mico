@@ -1442,6 +1442,130 @@ def test_master_task_lifecycle_tracks_pending_and_running_states():
     assert task_after_assignment["last_attempt_id"] == assignment["attempt_id"]
 
 
+def test_master_runtime_reassigns_task_after_worker_disconnect():
+    from master.master import MasterTaskQueue, handle_client
+
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9000,
+    }
+    task_queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    task_queue.submit({"task_id": "task-runtime-disconnect", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    worker_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    registration_message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": "msg-reg-runtime-disconnect",
+        "request_id": "req-reg-runtime-disconnect",
+        "timestamp_ms": int(time.time() * 1000),
+        "source": {
+            **worker_identity,
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": master_identity["node_id"],
+            "node_label": master_identity["node_label"],
+            "node_role": master_identity["node_role"],
+        },
+        "payload": build_register_payload(master_identity, "127.0.0.1", 9101, assignment_epoch=1),
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    thread = threading.Thread(target=handle_client, args=(server_sock, None, registry, master_identity, task_queue), daemon=True)
+    thread.start()
+
+    send_msg(client_sock, registration_message)
+    time.sleep(0.05)
+
+    assignment = task_queue.claim_next_task(worker_identity["node_id"], assignment_epoch=1, loan_id=None)
+    assert assignment is not None
+    assert task_queue.get_task("task-runtime-disconnect")["status"] == "running"
+
+    client_sock.close()
+    time.sleep(0.1)
+
+    queued = task_queue.get_task("task-runtime-disconnect")
+    assert queued["status"] == "pending"
+    retry = task_queue.claim_next_task("22222222-2222-4222-8222-222222222223", assignment_epoch=2, loan_id=None)
+    assert retry is not None
+    assert retry["task_id"] == "task-runtime-disconnect"
+    assert retry["task_label"] == queued["task_label"]
+    assert retry["attempt_id"] != assignment["attempt_id"]
+
+
+def test_master_runtime_reaps_timed_out_task_without_new_task_request():
+    from master.master import MasterTaskQueue, start_task_reaper_loop
+
+    task_queue = MasterTaskQueue(task_timeout_ms=20, max_task_attempts=3)
+    task_queue.submit({"task_id": "task-runtime-timeout", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+    first_assignment = task_queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+
+    stop_event = threading.Event()
+    thread = start_task_reaper_loop(task_queue, interval_seconds=0.01, stop_event=stop_event)
+    time.sleep(0.12)
+    stop_event.set()
+    thread.join(timeout=1)
+
+    queued = task_queue.get_task("task-runtime-timeout")
+    assert queued["status"] == "pending"
+    assert queued["attempt_count"] == 1
+    retry = task_queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert retry is not None
+    assert retry["task_id"] == "task-runtime-timeout"
+    assert retry["attempt_id"] != first_assignment["attempt_id"]
+
+
+def test_master_third_attempt_can_succeed_and_only_fails_after_last_attempt_expires():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=50, max_task_attempts=3)
+    queue.submit({"task_id": "task-third-attempt", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+
+    first = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first is not None
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+    second = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second is not None
+    assert second["attempt_id"] != first["attempt_id"]
+
+    queue.release_task("task-third-attempt", reason="new_assignment")
+    third = queue.claim_next_task("worker-c", assignment_epoch=3, loan_id=None)
+    assert third is not None
+    assert third["attempt_id"] != first["attempt_id"]
+    assert queue.get_task("task-third-attempt")["status"] == "running"
+
+    queue.complete_task("task-third-attempt", third["attempt_id"], accepted=True, reason="completed", payload={"result": 55})
+    completed = queue.get_task("task-third-attempt")
+    assert completed["status"] == "completed"
+    assert completed["result_payload"]["result"] == 55
+
+    queue.submit({"task_id": "task-third-attempt-final-fail", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+    first_fail = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_fail is not None
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+    second_fail = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second_fail is not None
+    queue.handle_worker_unavailable("worker-b", reason="socket closed")
+    third_fail = queue.claim_next_task("worker-c", assignment_epoch=3, loan_id=None)
+    assert third_fail is not None
+    queue.handle_worker_unavailable("worker-c", reason="socket closed")
+    failed = queue.get_task("task-third-attempt-final-fail")
+    assert failed["status"] == "failed"
+    assert failed["failed_reason"] == "max_task_attempts_exceeded"
+
+
 def test_master_reuses_attempt_id_for_same_retry_and_generates_new_one_for_new_assignment():
     from master.master import MasterTaskQueue
 
@@ -1469,6 +1593,74 @@ def test_master_reuses_attempt_id_for_same_retry_and_generates_new_one_for_new_a
     assert next_assignment is not None
     assert next_assignment["attempt_id"] != first_attempt_id
     assert queue.get_task("task-attempt-1")["attempt_count"] == 2
+
+
+def test_master_requeues_running_task_after_timeout_and_starts_new_attempt():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=5, max_task_attempts=3)
+    queue.submit({"task_id": "task-timeout-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    first_attempt_id = first_assignment["attempt_id"]
+
+    queue.mark_task_timed_out("task-timeout-1", reason="timeout")
+    queued = queue.get_task("task-timeout-1")
+    assert queued["status"] == "pending"
+    assert queued["attempt_count"] == 1
+    assert queued["last_attempt_id"] == first_attempt_id
+
+    retried = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert retried is not None
+    assert retried["attempt_id"] != first_attempt_id
+    assert retried["task_id"] == "task-timeout-1"
+    assert retried["task_label"] == "task-0001"
+
+
+def test_master_reassigns_task_when_worker_becomes_unavailable_and_starts_new_attempt():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-worker-loss-1", "task_kind": "sum_range", "parameters": {"start": 10, "end": 20}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    first_attempt_id = first_assignment["attempt_id"]
+
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+    queued = queue.get_task("task-worker-loss-1")
+    assert queued["status"] == "pending"
+    assert queued["attempt_count"] == 1
+    assert queued["last_attempt_id"] == first_attempt_id
+
+    retried = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert retried is not None
+    assert retried["attempt_id"] != first_attempt_id
+    assert retried["task_id"] == "task-worker-loss-1"
+    assert retried["task_label"] == "task-0001"
+
+
+def test_master_marks_task_failed_after_max_attempts_are_exhausted():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=5, max_task_attempts=2)
+    queue.submit({"task_id": "task-max-attempts-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    queue.handle_worker_unavailable("worker-a", reason="socket closed")
+    queue.release_task("task-max-attempts-1", reason="new_assignment")
+    first_retry = queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert first_retry is not None
+    assert first_retry["attempt_id"] != first_assignment["attempt_id"]
+    assert queue.get_task("task-max-attempts-1")["attempt_count"] == 2
+
+    queue.handle_worker_unavailable("worker-b", reason="socket closed")
+    queued = queue.get_task("task-max-attempts-1")
+    assert queued["status"] == "failed"
+    assert queued["attempt_count"] == 2
+    assert queued["failed_reason"] == "max_task_attempts_exceeded"
 
 
 def test_master_rejects_duplicate_task_result_and_counts_once():

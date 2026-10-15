@@ -171,7 +171,7 @@ def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, obj
     return message
 
 
-def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, stop_event: threading.Event | None = None, interval_seconds: float = 10.0):
+def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, stop_event: threading.Event | None = None, interval_seconds: float = 10.0, task_queue: MasterTaskQueue | None = None):
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -197,6 +197,8 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
             except (BrokenPipeError, ConnectionResetError, OSError):
                 log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "socket_closed")
                 registry.mark_worker_unavailable(worker_identity["node_id"], reason="socket closed")
+                if task_queue is not None:
+                    task_queue.handle_worker_unavailable(worker_identity["node_id"], reason="socket closed")
                 stop_event.set()
                 try:
                     conn.shutdown(socket.SHUT_RDWR)
@@ -211,6 +213,24 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
     thread = threading.Thread(target=loop, daemon=True)
     thread.start()
     return thread, stop_event
+
+
+def start_task_reaper_loop(task_queue: "MasterTaskQueue", *, interval_seconds: float = 1.0, stop_event: threading.Event | None = None):
+    if stop_event is None:
+        stop_event = threading.Event()
+
+    def loop() -> None:
+        while not stop_event.is_set():
+            if stop_event.wait(interval_seconds):
+                break
+            expired = task_queue.reap_timed_out_tasks()
+            if expired:
+                for task_id in expired:
+                    log_event("ASD", "master", "queue", "task_timeout", task_id, "requeued")
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    return thread
 
 
 def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None) -> None:
@@ -231,11 +251,15 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
             except OSError:
                 if current_worker_identity is not None:
                     registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
+                    if task_queue is not None:
+                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
                 break
 
             if messages is None:
                 if current_worker_identity is not None:
                     registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
+                    if task_queue is not None:
+                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
                 break
 
             if not messages:
@@ -326,7 +350,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
 
                     if current_worker_thread is None:
-                        current_worker_thread, session_stop = start_master_heartbeat_loop(conn, registry, master_identity, current_worker_identity, write_lock)
+                        current_worker_thread, session_stop = start_master_heartbeat_loop(conn, registry, master_identity, current_worker_identity, write_lock, task_queue=task_queue)
 
                 elif msg_type == "heartbeat":
                     ack = build_heartbeat_ack_message(message, source=master_identity, destination=source)
@@ -350,6 +374,8 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     else:
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "invalid")
                         if worker.get("status") == "unavailable":
+                            if task_queue is not None:
+                                task_queue.handle_worker_unavailable(source["node_id"], reason="heartbeat timeout")
                             session_stop.set()
                             try:
                                 conn.shutdown(socket.SHUT_RDWR)
@@ -506,12 +532,18 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
     except ConnectionResetError:
         if current_worker_identity is not None:
             registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
+            if task_queue is not None:
+                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
     except BrokenPipeError:
         if current_worker_identity is not None:
             registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
+            if task_queue is not None:
+                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
     except OSError:
         if current_worker_identity is not None:
             registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
+            if task_queue is not None:
+                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
     finally:
         session_stop.set()
         try:
@@ -525,11 +557,13 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
 
 class MasterTaskQueue:
-    def __init__(self):
+    def __init__(self, *, task_timeout_ms: int = 30000, max_task_attempts: int = 3):
         self._lock = threading.RLock()
         self._tasks: Dict[str, Dict[str, object]] = {}
         self._order: list[str] = []
         self._next_label_index = 1
+        self.task_timeout_ms = int(task_timeout_ms)
+        self.max_task_attempts = int(max_task_attempts)
 
     def _next_task_label(self) -> str:
         label = f"task-{self._next_label_index:04d}"
@@ -582,6 +616,9 @@ class MasterTaskQueue:
                 "last_assignment_epoch": None,
                 "assigned_to": None,
                 "loan_id": None,
+                "running_since_ms": None,
+                "task_timeout_ms": int(self.task_timeout_ms),
+                "max_task_attempts": int(self.max_task_attempts),
                 "_reusable_attempt_id": None,
                 "decision": dict(decision),
             }
@@ -611,6 +648,102 @@ class MasterTaskQueue:
             record["attempts"][attempt_id] = attempt_record
             return dict(attempt_record)
 
+    def mark_task_timed_out(self, task_id: str, *, reason: str = "timeout", now_ms: int | None = None) -> bool:
+        if not isinstance(task_id, str) or not task_id.strip():
+            return False
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return False
+
+            now_value = int(time.time() * 1000) if now_ms is None else int(now_ms)
+            attempt_id = record.get("active_attempt_id") or record.get("last_attempt_id")
+            if attempt_id is not None and attempt_id in record.get("attempts", {}):
+                record["attempts"][attempt_id]["status"] = "timed_out"
+                record["attempts"][attempt_id]["timed_out_reason"] = str(reason)
+
+            if record.get("attempt_count", 0) >= int(record.get("max_task_attempts", self.max_task_attempts)):
+                record["status"] = "failed"
+                record["failed_reason"] = "max_task_attempts_exceeded"
+                record["failed_at_ms"] = now_value
+                record["assigned_to"] = None
+                record["loan_id"] = None
+                record["active_attempt_id"] = None
+                record["running_since_ms"] = None
+                record["_reusable_attempt_id"] = None
+                return True
+
+            record["status"] = "pending"
+            record["assigned_to"] = None
+            record["loan_id"] = None
+            record["active_attempt_id"] = None
+            record["running_since_ms"] = None
+            record["failure_reason"] = str(reason)
+            record["_reusable_attempt_id"] = None
+            return True
+
+    def reap_timed_out_tasks(self, *, now_ms: int | None = None) -> list[str]:
+        timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        expired: list[str] = []
+        with self._lock:
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                if record.get("status") != "running":
+                    continue
+                running_since_ms = record.get("running_since_ms")
+                if running_since_ms is None:
+                    continue
+                timeout_ms = int(record.get("task_timeout_ms", self.task_timeout_ms))
+                if timestamp - int(running_since_ms) >= timeout_ms:
+                    self.mark_task_timed_out(task_id, reason="timeout", now_ms=timestamp)
+                    expired.append(task_id)
+        return expired
+
+    def handle_worker_unavailable(self, worker_id: str, *, reason: str = "worker_unavailable", now_ms: int | None = None) -> list[str]:
+        if not isinstance(worker_id, str) or not worker_id.strip():
+            raise ValueError("worker_id is required")
+
+        timestamp = int(time.time() * 1000) if now_ms is None else int(now_ms)
+        affected: list[str] = []
+        with self._lock:
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                if record.get("status") != "running":
+                    continue
+                if str(record.get("assigned_to", "")) != str(worker_id):
+                    continue
+                active_id = record.get("active_attempt_id") or record.get("last_attempt_id")
+                if active_id is not None and active_id in record.get("attempts", {}):
+                    record["attempts"][active_id]["status"] = "failed"
+                    record["attempts"][active_id]["failed_reason"] = str(reason)
+                if record.get("attempt_count", 0) >= int(record.get("max_task_attempts", self.max_task_attempts)):
+                    record["status"] = "failed"
+                    record["failed_reason"] = "max_task_attempts_exceeded"
+                    record["failed_at_ms"] = timestamp
+                    record["assigned_to"] = None
+                    record["loan_id"] = None
+                    record["active_attempt_id"] = None
+                    record["running_since_ms"] = None
+                    record["_reusable_attempt_id"] = None
+                else:
+                    record["status"] = "pending"
+                    record["assigned_to"] = None
+                    record["loan_id"] = None
+                    record["active_attempt_id"] = None
+                    record["running_since_ms"] = None
+                    record["failure_reason"] = str(reason)
+                    record["_reusable_attempt_id"] = None
+                affected.append(task_id)
+        return affected
+
+    def invalidate_task_for_worker(self, worker_id: str, *, reason: str = "worker_unavailable", now_ms: int | None = None) -> list[str]:
+        return self.handle_worker_unavailable(worker_id, reason=reason, now_ms=now_ms)
+
     def claim_next_task(self, worker_id: str, *, assignment_epoch: int, loan_id: str | None = None) -> Dict[str, object] | None:
         if not isinstance(worker_id, str) or not worker_id.strip():
             raise ValueError("worker_id is required")
@@ -624,7 +757,14 @@ class MasterTaskQueue:
                 record = self._tasks.get(task_id)
                 if record is None:
                     continue
+
                 if record.get("status") in {"running", "assigned", "completed", "failed"}:
+                    continue
+
+                if record.get("status") == "pending" and int(record.get("attempt_count", 0)) >= int(record.get("max_task_attempts", self.max_task_attempts)):
+                    record["status"] = "failed"
+                    record["failed_reason"] = "max_task_attempts_exceeded"
+                    record["failed_at_ms"] = int(time.time() * 1000)
                     continue
 
                 reusable_attempt_id = record.get("_reusable_attempt_id")
@@ -641,12 +781,15 @@ class MasterTaskQueue:
                 record["assignment_epoch"] = int(assignment_epoch)
                 record["last_assignment_epoch"] = int(assignment_epoch)
                 record["loan_id"] = loan_id
+                record["running_since_ms"] = int(time.time() * 1000)
+                record["active_attempt_id"] = attempt_id
                 record["attempts"][attempt_id] = {
                     "attempt_id": attempt_id,
                     "status": "running",
                     "worker_id": str(worker_id),
                     "assignment_epoch": int(assignment_epoch),
                     "loan_id": loan_id,
+                    "assigned_at_ms": record["running_since_ms"],
                 }
                 record["last_attempt_id"] = attempt_id
 
@@ -681,6 +824,8 @@ class MasterTaskQueue:
             record["status"] = "pending"
             record["assigned_to"] = None
             record["loan_id"] = None
+            record["active_attempt_id"] = None
+            record["running_since_ms"] = None
             record["release_reason"] = reason or "released"
             if attempt_id is not None and attempt_id in record.get("attempts", {}):
                 record["attempts"][attempt_id]["status"] = "pending"
@@ -712,6 +857,10 @@ class MasterTaskQueue:
                 record["completed_at"] = int(time.time() * 1000)
                 record["result_status"] = "ok"
                 record["result_payload"] = payload or {}
+                record["assigned_to"] = None
+                record["loan_id"] = None
+                record["active_attempt_id"] = None
+                record["running_since_ms"] = None
                 record["attempts"][attempt_id]["status"] = "completed"
                 return True, reason or "completed"
 
@@ -719,6 +868,10 @@ class MasterTaskQueue:
             record["completed"] = False
             record["result_status"] = "rejected"
             record["result_payload"] = payload or {}
+            record["assigned_to"] = None
+            record["loan_id"] = None
+            record["active_attempt_id"] = None
+            record["running_since_ms"] = None
             record["attempts"][attempt_id]["status"] = "failed"
             return False, reason or "duplicate result"
 
@@ -730,6 +883,8 @@ class MasterTaskQueue:
 def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None:
     registry = MasterRegistry()
     task_queue = MasterTaskQueue()
+    reaper_stop = threading.Event()
+    start_task_reaper_loop(task_queue, interval_seconds=0.25, stop_event=reaper_stop)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
@@ -743,7 +898,11 @@ def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None
     except KeyboardInterrupt:
         pass
     finally:
-        server.close()
+        reaper_stop.set()
+        try:
+            server.close()
+        except OSError:
+            pass
 
 
 def main() -> None:
