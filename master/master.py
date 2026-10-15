@@ -18,6 +18,7 @@ from protocol import (
     MasterRegistry,
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_metrics_response_message,
     build_no_task_message,
     build_protocol_error_message,
     build_task_ack_message as protocol_build_task_ack_message,
@@ -410,6 +411,49 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             except OSError:
                                 pass
                             return
+
+                elif msg_type == "metrics_request":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if not isinstance(payload, dict) or not validate_message(message):
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_protocol_error_message(message, master_identity, "invalid metrics_request payload"))
+                        continue
+
+                    metrics = task_queue.snapshot() if task_queue is not None else {
+                        "total_tasks": 0,
+                        "completed": 0,
+                        "pending": 0,
+                        "running": 0,
+                        "failed": 0,
+                        "timeout_attempts": 0,
+                        "recovered_after_timeout": 0,
+                        "tasks_with_multiple_attempts": 0,
+                        "pending_task_ids": [],
+                        "running_task_ids": [],
+                        "failed_task_ids": [],
+                        "completed_task_ids": [],
+                    }
+                    response = build_metrics_response_message(
+                        message,
+                        source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        },
+                        destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        },
+                        metrics=metrics,
+                    )
+                    registry.remember_processed_message(message, response)
+                    with write_lock:
+                        send_msg(conn, response)
+                    log_event("ASD", "master", source["node_label"], "metrics_response", request_id, "sent")
 
                 elif msg_type == "task_submit":
                     payload = message.get("payload", {})

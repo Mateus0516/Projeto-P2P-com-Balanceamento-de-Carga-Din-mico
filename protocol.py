@@ -59,7 +59,7 @@ def _validate_node_identity(node: Any) -> bool:
     if parsed_uuid.version != 4:
         return False
 
-    if node["node_role"] not in {"master", "worker"}:
+    if node["node_role"] not in {"master", "worker", "collector"}:
         return False
 
     return True
@@ -228,6 +228,56 @@ def validate_no_task_payload(payload: Any) -> bool:
     return True
 
 
+def validate_metrics_request_payload(payload: Any) -> bool:
+    return isinstance(payload, dict)
+
+
+def validate_metrics_response_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = (
+        "total_tasks",
+        "completed",
+        "pending",
+        "running",
+        "failed",
+        "timeout_attempts",
+        "recovered_after_timeout",
+        "tasks_with_multiple_attempts",
+        "pending_task_ids",
+        "running_task_ids",
+        "failed_task_ids",
+        "completed_task_ids",
+    )
+    if any(field not in payload for field in required_fields):
+        return False
+
+    int_fields = (
+        "total_tasks",
+        "completed",
+        "pending",
+        "running",
+        "failed",
+        "timeout_attempts",
+        "recovered_after_timeout",
+        "tasks_with_multiple_attempts",
+    )
+    for field in int_fields:
+        value = payload.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return False
+
+    for field in ("pending_task_ids", "running_task_ids", "failed_task_ids", "completed_task_ids"):
+        value = payload.get(field)
+        if not isinstance(value, list):
+            return False
+        if any(not isinstance(item, str) or not item.strip() for item in value):
+            return False
+
+    return True
+
+
 def validate_task_result_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -309,7 +359,7 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
-    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack"}:
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response"}:
         return False
 
     for field in ("type", "message_id", "request_id"):
@@ -374,6 +424,14 @@ def validate_message(message: Any) -> bool:
 
     if message["type"] == "task_ack":
         if not validate_task_ack_payload(payload):
+            return False
+
+    if message["type"] == "metrics_request":
+        if not validate_metrics_request_payload(payload):
+            return False
+
+    if message["type"] == "metrics_response":
+        if not validate_metrics_response_payload(payload):
             return False
 
     return True
@@ -487,6 +545,35 @@ def build_no_task_message(request_message: dict, source: dict, destination: dict
         "source": dict(source),
         "destination": dict(destination),
         "payload": {"retry_after_ms": int(retry_after_ms)},
+    }
+
+
+def build_metrics_request_message(source: dict, destination: dict, *, request_id: str | None = None) -> dict:
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "metrics_request",
+        "message_id": f"metrics-request-{uuid.uuid4()}",
+        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {},
+    }
+
+
+def build_metrics_response_message(request_message: dict, source: dict, destination: dict, *, metrics: dict) -> dict:
+    if not validate_metrics_response_payload(metrics):
+        raise ValueError("metrics payload does not match the snapshot contract")
+
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "metrics_response",
+        "message_id": f"metrics-response-{uuid.uuid4()}",
+        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": dict(metrics),
     }
 
 
@@ -645,7 +732,7 @@ def classify_protocol_error(message: dict) -> str:
         return "invalid field capitalization: use 'version' instead of 'Version'"
 
     if "type" in message and isinstance(message["type"], str):
-        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack"}:
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response"}:
             return f"unknown message type: {message['type']}"
 
     if "version" in message and isinstance(message["version"], str):

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from collector.collector import export_reports, request_metrics
 from master.master import (
     MasterTaskQueue,
     build_ack_message,
@@ -20,7 +21,10 @@ from protocol import (
     MasterRegistry,
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_metrics_request_message,
+    build_metrics_response_message,
     extract_complete_messages,
+    recv_msgs,
     send_msg,
     validate_message,
 )
@@ -2199,6 +2203,112 @@ def test_master_task_queue_snapshot_reports_statuses_timeouts_and_retries():
     failed_snapshot = failed_queue.snapshot()
     assert failed_snapshot["failed"] == 1
     assert failed_snapshot["failed_task_ids"] == ["task-snapshot-maxfail"]
+
+
+def test_metrics_request_and_response_messages_match_protocol_contract():
+    collector = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "collector-a",
+        "node_role": "collector",
+    }
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    request = build_metrics_request_message(collector, master, request_id="req-metrics-1")
+    assert validate_message(request) is True
+    snapshot = {
+        "total_tasks": 2,
+        "completed": 1,
+        "pending": 1,
+        "running": 0,
+        "failed": 0,
+        "timeout_attempts": 0,
+        "recovered_after_timeout": 0,
+        "tasks_with_multiple_attempts": 0,
+        "pending_task_ids": ["task-10"],
+        "running_task_ids": [],
+        "failed_task_ids": [],
+        "completed_task_ids": ["task-09"],
+    }
+    response = build_metrics_response_message(request, master, collector, metrics=snapshot)
+    assert validate_message(response) is True
+    assert response["request_id"] == "req-metrics-1"
+    assert response["payload"] == snapshot
+
+
+def test_master_responds_to_metrics_request_without_changing_task_state():
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-metrics-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+    queue.submit({"task_id": "task-metrics-2", "task_kind": "sum_range", "parameters": {"start": 6, "end": 10}})
+    before = queue.snapshot()
+
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    collector_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "collector-a",
+        "node_role": "collector",
+    }
+    registry = MasterRegistry()
+    server_sock, client_sock = socket.socketpair()
+    client_sock.settimeout(2.0)
+    try:
+        thread = threading.Thread(
+            target=handle_client,
+            args=(server_sock, ("127.0.0.1", 9000), registry, master_identity, queue),
+            daemon=True,
+        )
+        thread.start()
+
+        request = build_metrics_request_message(collector_identity, master_identity, request_id="req-metrics-query")
+        send_msg(client_sock, request)
+        messages = recv_msgs(client_sock, bytearray())
+        assert messages is not None and any(msg.get("type") == "metrics_response" for msg in messages)
+
+        response = next(msg for msg in messages if msg.get("type") == "metrics_response")
+        assert response["request_id"] == "req-metrics-query"
+        assert response["payload"] == before
+        assert queue.snapshot() == before
+    finally:
+        client_sock.close()
+        server_sock.close()
+
+
+def test_collector_exports_json_and_csv_reports(tmp_path):
+    metrics = {
+        "total_tasks": 3,
+        "completed": 2,
+        "pending": 1,
+        "running": 0,
+        "failed": 0,
+        "timeout_attempts": 1,
+        "recovered_after_timeout": 1,
+        "tasks_with_multiple_attempts": 1,
+        "pending_task_ids": ["task-1"],
+        "running_task_ids": [],
+        "failed_task_ids": [],
+        "completed_task_ids": ["task-0", "task-2"],
+    }
+
+    json_path, csv_path = export_reports(metrics, tmp_path, timestamp="2026-10-15T12-00-00Z")
+    assert json_path.exists()
+    assert csv_path.exists()
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload == metrics
+    csv_text = csv_path.read_text(encoding="utf-8")
+    assert "total_tasks" in csv_text
+    assert "task-1" in csv_text
 
 
 def test_master_requeues_running_task_after_timeout_and_starts_new_attempt():
