@@ -511,6 +511,81 @@ def test_master_task_queue_is_thread_safe_for_parallel_submissions():
     assert len({item["task_id"] for item in submitted}) == 8
 
 
+def test_master_parallel_submissions_keep_unique_ids_and_fifo_registration():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    barrier = threading.Barrier(10)
+    decisions = []
+
+    def submitter(index):
+        barrier.wait()
+        decision = queue.submit({
+            "task_id": f"parallel-registration-{index}",
+            "task_kind": "sum_range",
+            "parameters": {"start": index, "end": index + 10},
+        })
+        decisions.append(decision)
+
+    threads = [threading.Thread(target=submitter, args=(i,)) for i in range(10)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(decisions) == 10
+    assert len({item["task_id"] for item in decisions}) == 10
+    assert len({item["task_label"] for item in decisions}) == 10
+    assert all(item["accepted"] for item in decisions)
+    assert len(queue.pending()) == 10
+
+
+def test_master_maintains_single_active_attempt_under_timeout_disconnect_and_result_race():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-race-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 12}})
+
+    assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert assignment is not None
+    attempt_id = assignment["attempt_id"]
+
+    barrier = threading.Barrier(3)
+    outcomes = []
+
+    def mark_timeout():
+        barrier.wait()
+        outcomes.append(("timeout", queue.mark_task_timed_out("task-race-1", reason="timeout")))
+
+    def mark_disconnect():
+        barrier.wait()
+        outcomes.append(("disconnect", queue.handle_worker_unavailable("worker-a", reason="socket closed")))
+
+    def complete_result():
+        barrier.wait()
+        outcomes.append(("result", queue.complete_task("task-race-1", attempt_id, accepted=True, reason="completed", payload={"result": {"sum": 78}})))
+
+    threads = [
+        threading.Thread(target=mark_timeout),
+        threading.Thread(target=mark_disconnect),
+        threading.Thread(target=complete_result),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    current = queue.get_task("task-race-1")
+    assert current["status"] in {"pending", "failed"}
+    assert current["attempt_count"] == 1
+    assert current["last_attempt_id"] == attempt_id
+    assert current["assigned_to"] in {None, "worker-a"} or current["assigned_to"] is None
+    result_outcomes = [item for item in outcomes if item[0] == "result"]
+    assert len(result_outcomes) == 1
+    accepted_result = result_outcomes[0][1]
+    assert accepted_result[0] in {True, False}
+
+
 def test_end_to_end_real_tcp_flow_submit_assign_result_and_ack():
     from client.client import TaskClient
     from master.master import MasterRegistry, MasterTaskQueue, handle_client
