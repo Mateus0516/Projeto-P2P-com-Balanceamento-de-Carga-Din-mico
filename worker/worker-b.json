@@ -18,5 +18,6 @@
     "port": 9000,
     "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
     "label": "master"
-  }
+  },
+  "execution_delay_ms": 1000
 }

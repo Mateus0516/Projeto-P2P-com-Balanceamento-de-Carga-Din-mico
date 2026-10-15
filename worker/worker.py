@@ -311,6 +311,7 @@ class WorkerSessionManager:
         self._task_polling_thread: threading.Thread | None = None
         self._loop_thread: threading.Thread | None = None
         self.busy = False
+        self.task_request_pending = False
         self.current_task: Dict[str, object] | None = None
         self.pending_results: Dict[str, Dict[str, object]] = {}
         self.next_task_ready_at = 0.0
@@ -325,6 +326,7 @@ class WorkerSessionManager:
         with self._lock:
             if self._current_session is session:
                 self._current_session = None
+            self.task_request_pending = False
         log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "session", "-", "lost")
 
     def _set_session(self, session: WorkerControlSession | None) -> None:
@@ -355,35 +357,47 @@ class WorkerSessionManager:
     def request_task(self, session: WorkerControlSession | None = None) -> bool:
         if session is None:
             session = self.current_session
-        if session is None or session.is_closed():
-            return False
-        if self.busy:
-            return False
-        if time.monotonic() < self.next_task_ready_at:
-            return False
 
-        master_identity = load_master_identity(self.config)
-        assignment_epoch = _coerce_assignment_epoch(self.config.get("assignment_epoch", 0))
-        loan_id = None if self.config.get("loan_id") is None else _coerce_loan_id(self.config.get("loan_id"), str(self.config.get("node_id", "")), str(self.config.get("node_label", "worker-a")))
-        message = build_task_request_message(
-            source={
-                "group_label": str(self.config.get("group_label", "p2p-cluster")),
-                "node_id": str(self.config.get("node_id", self.config.get("uuid", str(uuid.uuid4())))),
-                "node_label": str(self.config.get("node_label", self.config.get("label", "worker-a"))),
-                "node_role": str(self.config.get("node_role", "worker")),
-            },
-            destination={
-                "group_label": str(master_identity.get("group_label", "p2p-cluster")),
-                "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
-                "node_label": str(master_identity.get("node_label", "master")),
-                "node_role": str(master_identity.get("node_role", "master")),
-            },
-            assignment_epoch=assignment_epoch,
-            loan_id=loan_id,
-        )
-        session.send_message(message)
-        log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_request", message["request_id"], "sent")
-        return True
+        try:
+            with self._lock:
+                if session is None or session.is_closed():
+                    return False
+                if self.busy or self.task_request_pending:
+                    return False
+                if time.monotonic() < self.next_task_ready_at:
+                    return False
+                self.task_request_pending = True
+
+            master_identity = load_master_identity(self.config)
+            assignment_epoch = _coerce_assignment_epoch(self.config.get('assignment_epoch', 0))
+            loan_id = None if self.config.get('loan_id') is None else _coerce_loan_id(self.config.get('loan_id'), str(self.config.get('node_id', '')), str(self.config.get('node_label', 'worker-a')))
+            message = build_task_request_message(
+                source={
+                    'group_label': str(self.config.get('group_label', 'p2p-cluster')),
+                    'node_id': str(self.config.get('node_id', self.config.get('uuid', str(uuid.uuid4())))),
+                    'node_label': str(self.config.get('node_label', self.config.get('label', 'worker-a'))),
+                    'node_role': str(self.config.get('node_role', 'worker')),
+                },
+                destination={
+                    'group_label': str(master_identity.get('group_label', 'p2p-cluster')),
+                    'node_id': str(master_identity.get('node_id', '00000000-0000-4000-8000-000000000000')),
+                    'node_label': str(master_identity.get('node_label', 'master')),
+                    'node_role': str(master_identity.get('node_role', 'master')),
+                },
+                assignment_epoch=assignment_epoch,
+                loan_id=loan_id,
+            )
+            session.send_message(message)
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_request', message['request_id'], 'sent')
+            return True
+        except Exception:
+            with self._lock:
+                self.task_request_pending = False
+            raise
+
+    def _clear_task_request_pending(self) -> None:
+        with self._lock:
+            self.task_request_pending = False
 
     def _pending_result_key(self, task_id: str, attempt_id: str) -> str:
         return f"{str(task_id)}::{str(attempt_id)}"
@@ -439,57 +453,61 @@ class WorkerSessionManager:
         if not isinstance(message, dict) or not validate_message(message):
             return False
 
-        msg_type = message.get("type")
-        if msg_type == "task_assignment":
-            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+        msg_type = message.get('type')
+        if msg_type == 'task_ack':
+            self._clear_task_request_pending()
+
+        if msg_type == 'task_assignment':
+            payload = message.get('payload', {}) if isinstance(message.get('payload', {}), dict) else {}
             if not payload:
                 return False
 
+            self._clear_task_request_pending()
             self.busy = True
             self.current_task = {
-                "task_id": str(payload.get("task_id", "")),
-                "task_label": str(payload.get("task_label", "")),
-                "attempt_id": str(payload.get("attempt_id", "")),
-                "task_kind": payload.get("task_kind"),
-                "parameters": dict(payload.get("parameters", {})),
-                "assignment_epoch": int(payload.get("assignment_epoch", 0)),
-                "loan_id": payload.get("loan_id"),
+                'task_id': str(payload.get('task_id', '')),
+                'task_label': str(payload.get('task_label', '')),
+                'attempt_id': str(payload.get('attempt_id', '')),
+                'task_kind': payload.get('task_kind'),
+                'parameters': dict(payload.get('parameters', {})),
+                'assignment_epoch': int(payload.get('assignment_epoch', 0)),
+                'loan_id': payload.get('loan_id'),
             }
-            self.config["assignment_epoch"] = int(payload.get("assignment_epoch", self.config.get("assignment_epoch", 0)))
-            self.config["loan_id"] = payload.get("loan_id")
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_assignment", message.get("request_id", "unknown"), "received")
+            self.config['assignment_epoch'] = int(payload.get('assignment_epoch', self.config.get('assignment_epoch', 0)))
+            self.config['loan_id'] = payload.get('loan_id')
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_assignment', message.get('request_id', 'unknown'), 'received')
 
-            start = int(self.current_task["parameters"].get("start", 0))
-            end = int(self.current_task["parameters"].get("end", 0))
+            start = int(self.current_task['parameters'].get('start', 0))
+            end = int(self.current_task['parameters'].get('end', 0))
             try:
                 total = sum_range(start, end)
-                status = "ok"
-                result = {"sum": total}
+                status = 'ok'
+                result = {'sum': total}
                 error_code = None
             except ValueError:
-                status = "nok"
+                status = 'nok'
                 result = None
-                error_code = "invalid_range"
+                error_code = 'invalid_range'
 
             task_result = build_task_result_message(
                 message,
                 source={
-                    "group_label": str(self.config.get("group_label", "p2p-cluster")),
-                    "node_id": str(self.config.get("node_id", self.config.get("uuid", str(uuid.uuid4())))),
-                    "node_label": str(self.config.get("node_label", self.config.get("label", "worker-a"))),
-                    "node_role": str(self.config.get("node_role", "worker")),
+                    'group_label': str(self.config.get('group_label', 'p2p-cluster')),
+                    'node_id': str(self.config.get('node_id', self.config.get('uuid', str(uuid.uuid4())))),
+                    'node_label': str(self.config.get('node_label', self.config.get('label', 'worker-a'))),
+                    'node_role': str(self.config.get('node_role', 'worker')),
                 },
                 destination={
-                    "group_label": str(message["source"]["group_label"]),
-                    "node_id": str(message["source"]["node_id"]),
-                    "node_label": str(message["source"]["node_label"]),
-                    "node_role": str(message["source"]["node_role"]),
+                    'group_label': str(message['source']['group_label']),
+                    'node_id': str(message['source']['node_id']),
+                    'node_label': str(message['source']['node_label']),
+                    'node_role': str(message['source']['node_role']),
                 },
-                task_id=str(self.current_task["task_id"]),
-                task_label=str(self.current_task["task_label"]),
-                attempt_id=str(self.current_task["attempt_id"]),
-                assignment_epoch=int(self.current_task["assignment_epoch"]),
-                loan_id=self.current_task["loan_id"],
+                task_id=str(self.current_task['task_id']),
+                task_label=str(self.current_task['task_label']),
+                attempt_id=str(self.current_task['attempt_id']),
+                assignment_epoch=int(self.current_task['assignment_epoch']),
+                loan_id=self.current_task['loan_id'],
                 status=status,
                 result=result,
                 error_code=error_code,
@@ -497,17 +515,18 @@ class WorkerSessionManager:
             self._remember_pending_result(task_result)
             if self.current_session is not None:
                 self.current_session.send_message(task_result)
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_result", task_result["request_id"], status)
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_result', task_result['request_id'], status)
             return task_result
 
-        if msg_type == "no_task":
-            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
-            retry_after_ms = int(payload.get("retry_after_ms", 1000))
+        if msg_type == 'no_task':
+            payload = message.get('payload', {}) if isinstance(message.get('payload', {}), dict) else {}
+            retry_after_ms = int(payload.get('retry_after_ms', 1000))
+            self._clear_task_request_pending()
             self.next_task_ready_at = time.monotonic() + max(0.0, retry_after_ms / 1000.0)
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "no_task", message.get("request_id", "unknown"), f"retry_after_ms={retry_after_ms}")
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'no_task', message.get('request_id', 'unknown'), f'retry_after_ms={retry_after_ms}')
             return True
 
-        if msg_type == "task_ack":
+        if msg_type == 'task_ack':
             return self.process_task_ack(message)
 
         return False
@@ -515,24 +534,26 @@ class WorkerSessionManager:
     def process_task_ack(self, message: dict) -> bool:
         if not isinstance(message, dict) or not validate_message(message):
             return False
-        if message.get("type") != "task_ack":
+        if message.get('type') != 'task_ack':
             return False
 
-        payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
-        task_id = payload.get("task_id")
-        attempt_id = payload.get("attempt_id")
-        accepted = payload.get("accepted")
-        reason = payload.get("reason")
+        self._clear_task_request_pending()
+
+        payload = message.get('payload', {}) if isinstance(message.get('payload', {}), dict) else {}
+        task_id = payload.get('task_id')
+        attempt_id = payload.get('attempt_id')
+        accepted = payload.get('accepted')
+        reason = payload.get('reason')
 
         if not isinstance(task_id, str) or not task_id.strip() or not isinstance(attempt_id, str) or not attempt_id.strip():
             return False
 
-        if accepted is False and reason == "stale_attempt":
+        if accepted is False and reason == 'stale_attempt':
             self._drop_pending_result(task_id, attempt_id)
-            if self.current_task is not None and str(task_id) == str(self.current_task.get("task_id")) and str(attempt_id) == str(self.current_task.get("attempt_id")):
+            if self.current_task is not None and str(task_id) == str(self.current_task.get('task_id')) and str(attempt_id) == str(self.current_task.get('attempt_id')):
                 self.busy = False
                 self.current_task = None
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "stale_attempt")
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_ack', message.get('request_id', 'unknown'), 'stale_attempt')
             return False
 
         if not isinstance(accepted, bool) or accepted is not True:
@@ -543,19 +564,19 @@ class WorkerSessionManager:
         if self.current_task is None:
             if pending_match:
                 self._drop_pending_result(task_id, attempt_id)
-                log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+                log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_ack', message.get('request_id', 'unknown'), 'completed')
                 return True
             return False
 
-        if str(task_id) == str(self.current_task.get("task_id")) and str(attempt_id) == str(self.current_task.get("attempt_id")):
+        if str(task_id) == str(self.current_task.get('task_id')) and str(attempt_id) == str(self.current_task.get('attempt_id')):
             self._drop_pending_result(task_id, attempt_id)
             self.busy = False
             self.current_task = None
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_ack', message.get('request_id', 'unknown'), 'completed')
             return True
         if pending_match:
             self._drop_pending_result(task_id, attempt_id)
-            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+            log_event('ASD', str(self.config.get('node_label', 'worker-a')), 'master', 'task_ack', message.get('request_id', 'unknown'), 'completed')
             return True
         return False
 

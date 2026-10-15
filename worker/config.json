@@ -9,6 +9,7 @@
   "label": "worker-a",
   "assignment_epoch": 0,
   "loan_id": null,
+  "execution_delay_ms": 0,
   "master": {
     "group_label": "p2p-cluster",
     "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",

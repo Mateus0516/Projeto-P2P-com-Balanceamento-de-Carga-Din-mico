@@ -226,6 +226,37 @@ def start_task_reaper_loop(task_queue: "MasterTaskQueue", *, interval_seconds: f
     return thread
 
 
+def start_master_snapshot_loop(task_queue: "MasterTaskQueue", *, interval_seconds: float = 1.0, stop_event: threading.Event | None = None):
+    if stop_event is None:
+        stop_event = threading.Event()
+    if interval_seconds <= 0:
+        return None
+
+    def loop() -> None:
+        while not stop_event.is_set():
+            if stop_event.wait(interval_seconds):
+                break
+            snapshot = task_queue.snapshot()
+            print(
+                "MASTER SNAPSHOT "
+                f"total={snapshot['total_tasks']} "
+                f"completed={snapshot['completed']} "
+                f"pending={snapshot['pending']} "
+                f"running={snapshot['running']} "
+                f"failed={snapshot['failed']} "
+                f"timeout_attempts={snapshot['timeout_attempts']} "
+                f"recovered_after_timeout={snapshot['recovered_after_timeout']} "
+                f"tasks_with_multiple_attempts={snapshot['tasks_with_multiple_attempts']} "
+                f"pending_ids={snapshot['pending_task_ids']} "
+                f"running_ids={snapshot['running_task_ids']} "
+                f"failed_ids={snapshot['failed_task_ids']}"
+            )
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    return thread
+
+
 def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None) -> None:
     buffer = bytearray()
     write_lock = threading.Lock()
@@ -557,6 +588,101 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
             pass
 
 
+class LoadMonitor:
+    def __init__(self, task_queue: "MasterTaskQueue", *, saturation_threshold: int = 10, release_threshold: int = 3, stable_samples: int = 3, monitor_interval_ms: int = 1000):
+        if not isinstance(saturation_threshold, int) or isinstance(saturation_threshold, bool):
+            raise ValueError("saturation_threshold must be an integer")
+        if not isinstance(release_threshold, int) or isinstance(release_threshold, bool):
+            raise ValueError("release_threshold must be an integer")
+        if not isinstance(stable_samples, int) or isinstance(stable_samples, bool):
+            raise ValueError("stable_samples must be an integer")
+        if not isinstance(monitor_interval_ms, int) or isinstance(monitor_interval_ms, bool):
+            raise ValueError("monitor_interval_ms must be an integer")
+        if release_threshold >= saturation_threshold:
+            raise ValueError("release_threshold must be lower than saturation_threshold")
+        if saturation_threshold <= 0:
+            raise ValueError("saturation_threshold must be positive")
+        if release_threshold < 0:
+            raise ValueError("release_threshold must be non-negative")
+        if stable_samples <= 0:
+            raise ValueError("stable_samples must be positive")
+        if monitor_interval_ms <= 0:
+            raise ValueError("monitor_interval_ms must be positive")
+
+        self.task_queue = task_queue
+        self.saturation_threshold = int(saturation_threshold)
+        self.release_threshold = int(release_threshold)
+        self.stable_samples = int(stable_samples)
+        self.monitor_interval_ms = int(monitor_interval_ms)
+        self.state = "normal"
+        self.pending_tasks = 0
+        self.consecutive_above = 0
+        self.consecutive_below = 0
+        self.last_transition = None
+        self._lock = threading.RLock()
+
+    def _pending_count(self) -> int:
+        if hasattr(self.task_queue, "monitor_pending_count"):
+            return int(self.task_queue.monitor_pending_count())
+
+        total = 0
+        for record in self.task_queue.pending():
+            status = str(record.get("status", "pending")).lower()
+            if status == "pending":
+                total += 1
+        return total
+
+    def sample(self) -> str:
+        with self._lock:
+            self.pending_tasks = self._pending_count()
+
+            if self.pending_tasks > self.saturation_threshold:
+                self.consecutive_above += 1
+                self.consecutive_below = 0
+                if self.consecutive_above >= self.stable_samples:
+                    candidate_state = "saturated"
+                    if self.state != candidate_state:
+                        self.last_transition = int(time.time() * 1000)
+                        self.state = candidate_state
+                        log_event("ASD", "master", "queue", "load_state", str(self.pending_tasks), self.state)
+                return self.state
+
+            if self.pending_tasks <= self.release_threshold:
+                self.consecutive_below += 1
+                self.consecutive_above = 0
+                if self.consecutive_below >= self.stable_samples:
+                    candidate_state = "released"
+                    if self.state != candidate_state:
+                        self.last_transition = int(time.time() * 1000)
+                        self.state = candidate_state
+                        log_event("ASD", "master", "queue", "load_state", str(self.pending_tasks), self.state)
+                return self.state
+
+            self.consecutive_above = 0
+            self.consecutive_below = 0
+            if self.state in {"saturated", "released"}:
+                self.state = "normal"
+                self.last_transition = int(time.time() * 1000)
+                log_event("ASD", "master", "queue", "load_state", str(self.pending_tasks), self.state)
+            return self.state
+
+    def start(self, *, stop_event: threading.Event | None = None, interval_seconds: float | None = None) -> threading.Thread:
+        if stop_event is None:
+            stop_event = threading.Event()
+        if interval_seconds is None:
+            interval_seconds = max(self.monitor_interval_ms / 1000.0, 0.05)
+
+        def loop() -> None:
+            while not stop_event.is_set():
+                self.sample()
+                if stop_event.wait(interval_seconds):
+                    break
+
+        thread = threading.Thread(target=loop, daemon=True)
+        thread.start()
+        return thread
+
+
 class MasterTaskQueue:
     def __init__(self, *, task_timeout_ms: int = 30000, max_task_attempts: int = 3):
         self._lock = threading.RLock()
@@ -631,6 +757,85 @@ class MasterTaskQueue:
         with self._lock:
             return [dict(self._tasks[task_id]) for task_id in self._order]
 
+    def pending_count(self) -> int:
+        with self._lock:
+            total = 0
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                status = str(record.get("status", "pending")).lower()
+                if status in {"pending", "running", "assigned"}:
+                    total += 1
+            return total
+
+    def monitor_pending_count(self) -> int:
+        with self._lock:
+            total = 0
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                if str(record.get("status", "pending")).lower() == "pending":
+                    total += 1
+            return total
+
+    def snapshot(self) -> Dict[str, object]:
+        with self._lock:
+            total_tasks = len(self._tasks)
+            counts = {"completed": 0, "pending": 0, "running": 0, "failed": 0}
+            pending_task_ids: list[str] = []
+            running_task_ids: list[str] = []
+            failed_task_ids: list[str] = []
+            completed_task_ids: list[str] = []
+            timeout_attempts = 0
+            recovered_after_timeout = 0
+            tasks_with_multiple_attempts = 0
+
+            for task_id in list(self._order):
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+
+                status = str(record.get("status", "pending")).lower()
+                counts[status] = counts.get(status, 0) + 1
+
+                if status == "pending":
+                    pending_task_ids.append(task_id)
+                elif status == "running":
+                    running_task_ids.append(task_id)
+                elif status == "failed":
+                    failed_task_ids.append(task_id)
+                elif status == "completed":
+                    completed_task_ids.append(task_id)
+
+                attempts = record.get("attempts", {}) if isinstance(record.get("attempts", {}), dict) else {}
+                task_timeout_attempts = 0
+                for attempt in attempts.values():
+                    if str(attempt.get("status", "")).lower() == "timed_out":
+                        task_timeout_attempts += 1
+                timeout_attempts += task_timeout_attempts
+
+                if int(record.get("attempt_count", 0)) > 1:
+                    tasks_with_multiple_attempts += 1
+                if task_timeout_attempts > 0 and int(record.get("attempt_count", 0)) > 1 and status != "failed":
+                    recovered_after_timeout += 1
+
+            return {
+                "total_tasks": int(total_tasks),
+                "completed": int(counts.get("completed", 0)),
+                "pending": int(counts.get("pending", 0)),
+                "running": int(counts.get("running", 0)),
+                "failed": int(counts.get("failed", 0)),
+                "timeout_attempts": int(timeout_attempts),
+                "recovered_after_timeout": int(recovered_after_timeout),
+                "tasks_with_multiple_attempts": int(tasks_with_multiple_attempts),
+                "pending_task_ids": pending_task_ids,
+                "running_task_ids": running_task_ids,
+                "failed_task_ids": failed_task_ids,
+                "completed_task_ids": completed_task_ids,
+            }
+
     def get_task(self, task_id: str) -> Dict[str, object] | None:
         with self._lock:
             record = self._tasks.get(task_id)
@@ -656,6 +861,10 @@ class MasterTaskQueue:
         with self._lock:
             record = self._tasks.get(task_id)
             if record is None:
+                return False
+            if str(record.get("status", "pending")).lower() in {"completed", "failed"}:
+                return False
+            if str(record.get("status", "pending")).lower() != "running":
                 return False
 
             now_value = int(time.time() * 1000) if now_ms is None else int(now_ms)
@@ -714,6 +923,8 @@ class MasterTaskQueue:
                 record = self._tasks.get(task_id)
                 if record is None:
                     continue
+                if str(record.get("status", "pending")).lower() in {"completed", "failed"}:
+                    continue
                 if record.get("status") != "running":
                     continue
                 if str(record.get("assigned_to", "")) != str(worker_id):
@@ -754,6 +965,18 @@ class MasterTaskQueue:
             raise ValueError("loan_id must be null or a non-empty string")
 
         with self._lock:
+            has_running_assignment = False
+            for task_id in self._order:
+                record = self._tasks.get(task_id)
+                if record is None:
+                    continue
+                if str(record.get("status", "")).lower() == "running" and str(record.get("assigned_to", "")) == str(worker_id):
+                    has_running_assignment = True
+                    break
+
+            if has_running_assignment:
+                return None
+
             for task_id in self._order:
                 record = self._tasks.get(task_id)
                 if record is None:
@@ -854,6 +1077,10 @@ class MasterTaskQueue:
             if bool(attempt_record.get("result_seen")):
                 return True, "duplicate result"
 
+            attempt_status = str(attempt_record.get("status", "")).lower()
+            if attempt_status in {"timed_out", "failed"}:
+                return False, "stale_attempt"
+
             if record.get("status") == "completed" and str(record.get("last_attempt_id")) == str(attempt_id):
                 return True, "duplicate result"
 
@@ -918,11 +1145,17 @@ class MasterTaskQueue:
             return len(self._tasks)
 
 
-def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None:
+def run_server(host: str, port: int, master_identity: Dict[str, object], *, snapshot_interval_seconds: float = 0.0) -> None:
     registry = MasterRegistry()
     task_queue = MasterTaskQueue()
     reaper_stop = threading.Event()
+    monitor_stop = threading.Event()
+    snapshot_stop = threading.Event()
+    load_monitor = LoadMonitor(task_queue, saturation_threshold=10, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
+    load_monitor.start(stop_event=monitor_stop, interval_seconds=1.0)
     start_task_reaper_loop(task_queue, interval_seconds=0.25, stop_event=reaper_stop)
+    if snapshot_interval_seconds > 0:
+        start_master_snapshot_loop(task_queue, interval_seconds=snapshot_interval_seconds, stop_event=snapshot_stop)
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((host, port))
@@ -937,6 +1170,8 @@ def run_server(host: str, port: int, master_identity: Dict[str, object]) -> None
         pass
     finally:
         reaper_stop.set()
+        monitor_stop.set()
+        snapshot_stop.set()
         try:
             server.close()
         except OSError:
@@ -947,12 +1182,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Master node for NDJSON registration protocol")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9000)
+    parser.add_argument("--snapshot-interval-seconds", type=float, default=0.0, help="Intervalo em segundos para imprimir o snapshot do Master; 0 desabilita")
     args = parser.parse_args()
 
     config = load_or_create_config(CONFIG_PATH)
     host = args.host if args.host != "127.0.0.1" else str(config.get("host", "127.0.0.1"))
     port = args.port if args.port != 9000 else int(config.get("port", 9000))
-    run_server(host, port, config)
+    run_server(host, port, config, snapshot_interval_seconds=args.snapshot_interval_seconds)
 
 
 if __name__ == "__main__":

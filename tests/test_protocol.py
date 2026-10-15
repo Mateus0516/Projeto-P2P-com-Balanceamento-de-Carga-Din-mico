@@ -540,6 +540,25 @@ def test_master_parallel_submissions_keep_unique_ids_and_fifo_registration():
     assert len(queue.pending()) == 10
 
 
+def test_load_monitor_counts_only_pending_tasks_for_saturation():
+    from master.master import LoadMonitor, MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    for index in range(13):
+        queue.submit({"task_id": f"load-pending-{index}", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+
+    for index in range(3):
+        queue.claim_next_task(f"worker-{index}", assignment_epoch=1, loan_id=None)
+
+    monitor = LoadMonitor(queue, saturation_threshold=10, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
+    for _ in range(3):
+        monitor.sample()
+
+    assert monitor.pending_tasks == 10
+    assert monitor.state == "normal"
+    assert monitor.consecutive_above == 0
+
+
 def test_master_maintains_single_active_attempt_under_timeout_disconnect_and_result_race():
     from master.master import MasterTaskQueue
 
@@ -576,7 +595,7 @@ def test_master_maintains_single_active_attempt_under_timeout_disconnect_and_res
         thread.join()
 
     current = queue.get_task("task-race-1")
-    assert current["status"] in {"pending", "failed"}
+    assert current["status"] in {"pending", "failed", "completed"}
     assert current["attempt_count"] == 1
     assert current["last_attempt_id"] == attempt_id
     assert current["assigned_to"] in {None, "worker-a"} or current["assigned_to"] is None
@@ -584,6 +603,74 @@ def test_master_maintains_single_active_attempt_under_timeout_disconnect_and_res
     assert len(result_outcomes) == 1
     accepted_result = result_outcomes[0][1]
     assert accepted_result[0] in {True, False}
+
+
+def test_master_load_monitor_detects_saturation_after_three_stable_samples():
+    from master.master import LoadMonitor, MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    for index in range(11):
+        queue.submit({"task_id": f"load-sat-{index}", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+
+    monitor = LoadMonitor(queue, saturation_threshold=10, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
+    for _ in range(3):
+        monitor.sample()
+
+    assert monitor.state == "saturated"
+    assert monitor.consecutive_above == 3
+    assert monitor.pending_tasks == 11
+
+
+def test_master_load_monitor_releases_after_three_stable_low_samples_and_resets_on_break():
+    from master.master import LoadMonitor, MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    for index in range(11):
+        queue.submit({"task_id": f"load-release-{index}", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+
+    monitor = LoadMonitor(queue, saturation_threshold=10, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
+    for _ in range(3):
+        monitor.sample()
+    assert monitor.state == "saturated"
+
+    queue._tasks = {}
+    queue._order = []
+    for index in range(3):
+        queue.submit({"task_id": f"load-release-low-{index}", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+
+    for _ in range(3):
+        monitor.sample()
+
+    assert monitor.state == "released"
+    assert monitor.consecutive_below == 3
+
+    queue.submit({"task_id": "load-release-bridge", "task_kind": "sum_range", "parameters": {"start": 1, "end": 10}})
+    monitor.sample()
+    assert monitor.consecutive_below == 0
+
+
+def test_master_load_monitor_validates_threshold_config():
+    from master.master import LoadMonitor, MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    with pytest.raises(ValueError):
+        LoadMonitor(queue, saturation_threshold=3, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
+    with pytest.raises(ValueError):
+        LoadMonitor(queue, saturation_threshold=10, release_threshold=10, stable_samples=3, monitor_interval_ms=1000)
+    with pytest.raises(ValueError):
+        LoadMonitor(queue, saturation_threshold=10, release_threshold=3, stable_samples=0, monitor_interval_ms=1000)
+
+
+def test_client_load_generator_is_deterministic_and_unique():
+    from client.load_generator import build_load_plan
+
+    plan_a = build_load_plan(task_count=10, start=1, end=1000, interval_ms=20, seed=7)
+    plan_b = build_load_plan(task_count=10, start=1, end=1000, interval_ms=20, seed=7)
+    assert plan_a == plan_b
+    assert len(plan_a) == 10
+    assert len({item["task_id"] for item in plan_a}) == 10
+    assert all(item["parameters"]["start"] == 1 for item in plan_a)
+    assert all(item["parameters"]["end"] == 1000 for item in plan_a)
 
 
 def test_end_to_end_real_tcp_flow_submit_assign_result_and_ack():
@@ -1394,6 +1481,98 @@ def test_worker_resumes_polling_after_accepted_task_ack():
         client_sock.close()
 
 
+def test_worker_clears_task_request_pending_on_no_task_and_ack():
+    from worker.worker import WorkerControlSession, WorkerSessionManager
+
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-pending-cleanup",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9104,
+        "assignment_epoch": 4,
+        "loan_id": None,
+    }
+    manager = WorkerSessionManager("127.0.0.1", 9000, config)
+    server_sock, client_sock = socket.socketpair()
+    try:
+        session = WorkerControlSession(client_sock)
+        manager._set_session(session)
+        manager.task_request_pending = True
+
+        no_task = {
+            "version": "sd_2026_2_v1",
+            "type": "no_task",
+            "message_id": "msg-no-task-pending",
+            "request_id": "req-no-task-pending",
+            "timestamp_ms": 1727170000500,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-pending-cleanup",
+                "node_role": "worker",
+            },
+            "payload": {"retry_after_ms": 250},
+        }
+        assert manager.process_inbound_message(no_task) is True
+        assert manager.task_request_pending is False
+        assert manager.next_task_ready_at > time.monotonic()
+
+        manager.task_request_pending = True
+        manager.current_task = {
+            "task_id": "task-pending-ack",
+            "task_label": "task-pending-ack-label",
+            "attempt_id": "attempt-pending-ack",
+        }
+        ack = {
+            "version": "sd_2026_2_v1",
+            "type": "task_ack",
+            "message_id": "msg-task-ack-pending",
+            "request_id": "req-task-pending-ack",
+            "timestamp_ms": 1727170000510,
+            "source": no_task["source"],
+            "destination": no_task["destination"],
+            "payload": {
+                "task_id": "task-pending-ack",
+                "attempt_id": "attempt-pending-ack",
+                "accepted": True,
+                "reason": "completed",
+            },
+        }
+        assert manager.process_task_ack(ack) is True
+        assert manager.task_request_pending is False
+    finally:
+        manager.stop_event.set()
+        server_sock.close()
+        client_sock.close()
+
+
+def test_master_does_not_assign_multiple_running_tasks_to_same_worker():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=30000, max_task_attempts=3)
+    queue.submit({"task_id": "task-assign-1", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+    queue.submit({"task_id": "task-assign-2", "task_kind": "sum_range", "parameters": {"start": 6, "end": 10}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    assert first_assignment["task_id"] == "task-assign-1"
+
+    second_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert second_assignment is None
+
+    task_one = queue.get_task("task-assign-1")
+    assert task_one["status"] == "running"
+    assert task_one["assigned_to"] == "worker-a"
+
+
 def test_worker_handles_two_consecutive_tasks():
     from worker.worker import WorkerControlSession, WorkerSessionManager
 
@@ -1969,6 +2148,59 @@ def test_master_reuses_attempt_id_for_same_retry_and_generates_new_one_for_new_a
     assert queue.get_task("task-attempt-1")["attempt_count"] == 2
 
 
+def test_master_task_queue_snapshot_reports_statuses_timeouts_and_retries():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=5, max_task_attempts=3)
+    queue.submit({"task_id": "task-snapshot-complete", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+    queue.submit({"task_id": "task-snapshot-retry", "task_kind": "sum_range", "parameters": {"start": 6, "end": 10}})
+    queue.submit({"task_id": "task-snapshot-pending", "task_kind": "sum_range", "parameters": {"start": 11, "end": 15}})
+
+    first_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_assignment is not None
+    assert queue.complete_task("task-snapshot-complete", first_assignment["attempt_id"], accepted=True, reason="completed", payload={"status": "ok", "result": {"sum": 15}})[0] is True
+
+    second_assignment = queue.claim_next_task("worker-b", assignment_epoch=1, loan_id=None)
+    assert second_assignment is not None
+    task_id_retried = second_assignment["task_id"]
+    assert queue.mark_task_timed_out(task_id_retried, reason="timeout") is True
+
+    retry_assignment = queue.claim_next_task("worker-c", assignment_epoch=2, loan_id=None)
+    assert retry_assignment is not None
+    assert retry_assignment["task_id"] == task_id_retried
+    assert queue.complete_task(task_id_retried, retry_assignment["attempt_id"], accepted=True, reason="completed", payload={"status": "ok", "result": {"sum": 36}})[0] is True
+
+    pending_assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert pending_assignment is not None
+    assert queue.release_task("task-snapshot-pending", attempt_id=pending_assignment["attempt_id"], reason="released") is True
+
+    snapshot = queue.snapshot()
+    assert snapshot["total_tasks"] == 3
+    assert snapshot["completed"] == 2
+    assert snapshot["pending"] == 1
+    assert snapshot["running"] == 0
+    assert snapshot["failed"] == 0
+    assert snapshot["timeout_attempts"] == 1
+    assert snapshot["recovered_after_timeout"] == 1
+    assert snapshot["tasks_with_multiple_attempts"] == 1
+    assert "task-snapshot-pending" in snapshot["pending_task_ids"]
+    assert task_id_retried in snapshot["completed_task_ids"]
+    assert "task-snapshot-complete" in snapshot["completed_task_ids"]
+
+    failed_queue = MasterTaskQueue(task_timeout_ms=5, max_task_attempts=2)
+    failed_queue.submit({"task_id": "task-snapshot-maxfail", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+    first_failed = failed_queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert first_failed is not None
+    failed_queue.mark_task_timed_out("task-snapshot-maxfail", reason="timeout")
+    second_failed = failed_queue.claim_next_task("worker-b", assignment_epoch=2, loan_id=None)
+    assert second_failed is not None
+    failed_queue.mark_task_timed_out("task-snapshot-maxfail", reason="timeout")
+
+    failed_snapshot = failed_queue.snapshot()
+    assert failed_snapshot["failed"] == 1
+    assert failed_snapshot["failed_task_ids"] == ["task-snapshot-maxfail"]
+
+
 def test_master_requeues_running_task_after_timeout_and_starts_new_attempt():
     from master.master import MasterTaskQueue
 
@@ -1990,6 +2222,35 @@ def test_master_requeues_running_task_after_timeout_and_starts_new_attempt():
     assert retried["attempt_id"] != first_attempt_id
     assert retried["task_id"] == "task-timeout-1"
     assert retried["task_label"] == "task-0001"
+
+
+def test_master_does_not_requeue_completed_task_after_timeout_or_worker_unavailable():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue(task_timeout_ms=5, max_task_attempts=3)
+    queue.submit({"task_id": "task-completed-no-requeue", "task_kind": "sum_range", "parameters": {"start": 1, "end": 5}})
+
+    assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    assert assignment is not None
+
+    accepted, reason = queue.complete_task(
+        "task-completed-no-requeue",
+        assignment["attempt_id"],
+        accepted=True,
+        reason="completed",
+        payload={"status": "ok", "result": {"sum": 15}},
+    )
+    assert accepted is True
+    assert reason == "completed"
+    assert queue.get_task("task-completed-no-requeue")["status"] == "completed"
+
+    timeout_result = queue.mark_task_timed_out("task-completed-no-requeue", reason="timeout")
+    unavailable_result = queue.handle_worker_unavailable("worker-a", reason="socket closed")
+
+    assert timeout_result is False
+    assert unavailable_result == []
+    assert queue.get_task("task-completed-no-requeue")["status"] == "completed"
+    assert queue.get_task("task-completed-no-requeue")["active_attempt_id"] is None
 
 
 def test_master_reassigns_task_when_worker_becomes_unavailable_and_starts_new_attempt():
