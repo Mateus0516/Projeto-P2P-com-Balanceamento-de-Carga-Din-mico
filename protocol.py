@@ -228,6 +228,76 @@ def validate_no_task_payload(payload: Any) -> bool:
     return True
 
 
+def validate_task_result_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("task_id", "task_label", "attempt_id", "assignment_epoch", "loan_id", "status", "result", "error_code")
+    if any(field not in payload for field in required_fields):
+        return False
+
+    task_id = payload.get("task_id")
+    task_label = payload.get("task_label")
+    attempt_id = payload.get("attempt_id")
+    assignment_epoch = payload.get("assignment_epoch")
+    loan_id = payload.get("loan_id")
+    status = payload.get("status")
+    result = payload.get("result")
+    error_code = payload.get("error_code")
+
+    if not isinstance(task_id, str) or not task_id.strip():
+        return False
+    if not isinstance(task_label, str) or not task_label.strip():
+        return False
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        return False
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        return False
+    if loan_id is not None and (not isinstance(loan_id, str) or not loan_id.strip()):
+        return False
+    if status not in {"ok", "nok"}:
+        return False
+    if status == "ok":
+        if not isinstance(result, dict):
+            return False
+        if "sum" not in result or not isinstance(result["sum"], int) or isinstance(result["sum"], bool):
+            return False
+        if error_code is not None:
+            return False
+    else:
+        if result is not None:
+            return False
+        if error_code is not None and (not isinstance(error_code, str) or not error_code.strip()):
+            return False
+
+    return True
+
+
+def validate_task_ack_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("task_id", "attempt_id", "accepted", "reason")
+    if any(field not in payload for field in required_fields):
+        return False
+
+    task_id = payload.get("task_id")
+    attempt_id = payload.get("attempt_id")
+    accepted = payload.get("accepted")
+    reason = payload.get("reason")
+
+    if not isinstance(task_id, str) or not task_id.strip():
+        return False
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        return False
+    if not isinstance(accepted, bool):
+        return False
+    if not isinstance(reason, str) or not reason.strip():
+        return False
+
+    return True
+
+
 def validate_message(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
@@ -239,7 +309,7 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
-    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task"}:
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack"}:
         return False
 
     for field in ("type", "message_id", "request_id"):
@@ -296,6 +366,14 @@ def validate_message(message: Any) -> bool:
 
     if message["type"] == "no_task":
         if not validate_no_task_payload(payload):
+            return False
+
+    if message["type"] == "task_result":
+        if not validate_task_result_payload(payload):
+            return False
+
+    if message["type"] == "task_ack":
+        if not validate_task_ack_payload(payload):
             return False
 
     return True
@@ -412,6 +490,77 @@ def build_no_task_message(request_message: dict, source: dict, destination: dict
     }
 
 
+def build_task_result_message(request_message: dict, source: dict, destination: dict, *, task_id: str, task_label: str, attempt_id: str, assignment_epoch: int, loan_id: str | None, status: str, result: dict | None, error_code: str | None) -> dict:
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task_id is required")
+    if not isinstance(task_label, str) or not task_label.strip():
+        raise ValueError("task_label is required")
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        raise ValueError("attempt_id is required")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if loan_id is not None and (not isinstance(loan_id, str) or not loan_id.strip()):
+        raise ValueError("loan_id must be null or a non-empty string")
+    if status not in {"ok", "nok"}:
+        raise ValueError("status must be 'ok' or 'nok'")
+    if status == "ok":
+        if not isinstance(result, dict) or "sum" not in result or not isinstance(result["sum"], int):
+            raise ValueError("successful task_result requires a dict result with int sum")
+        error_code = None
+    else:
+        if result is not None:
+            raise ValueError("failed task_result requires result to be null")
+        if error_code is not None and (not isinstance(error_code, str) or not error_code.strip()):
+            raise ValueError("error_code must be null or a non-empty string")
+
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "task_result",
+        "message_id": f"task-result-{uuid.uuid4()}",
+        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "task_id": str(task_id),
+            "task_label": str(task_label),
+            "attempt_id": str(attempt_id),
+            "assignment_epoch": int(assignment_epoch),
+            "loan_id": loan_id,
+            "status": str(status),
+            "result": None if status == "nok" else {"sum": int(result["sum"])},
+            "error_code": error_code,
+        },
+    }
+
+
+def build_task_ack_message(request_message: dict, source: dict, destination: dict, *, task_id: str, attempt_id: str, accepted: bool, reason: str) -> dict:
+    if not isinstance(task_id, str) or not task_id.strip():
+        raise ValueError("task_id is required")
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        raise ValueError("attempt_id is required")
+    if not isinstance(accepted, bool):
+        raise ValueError("accepted must be a bool")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("reason is required")
+
+    return {
+        "version": "sd_2026_2_v1",
+        "type": "task_ack",
+        "message_id": f"task-ack-{uuid.uuid4()}",
+        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "task_id": str(task_id),
+            "attempt_id": str(attempt_id),
+            "accepted": bool(accepted),
+            "reason": str(reason),
+        },
+    }
+
+
 def build_heartbeat_message(source: dict, destination: dict, sequence: int, request_id: str | None = None, assignment_epoch: int = 0) -> dict:
     if not isinstance(sequence, int) or isinstance(sequence, bool):
         raise ValueError("heartbeat sequence must be an integer")
@@ -496,7 +645,7 @@ def classify_protocol_error(message: dict) -> str:
         return "invalid field capitalization: use 'version' instead of 'Version'"
 
     if "type" in message and isinstance(message["type"], str):
-        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task"}:
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack"}:
             return f"unknown message type: {message['type']}"
 
     if "version" in message and isinstance(message["version"], str):

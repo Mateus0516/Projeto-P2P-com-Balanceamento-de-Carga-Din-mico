@@ -18,6 +18,7 @@ from protocol import (
     build_heartbeat_ack_message,
     build_heartbeat_message,
     build_task_request_message,
+    build_task_result_message,
     log_event,
     recv_msgs,
     send_msg,
@@ -281,6 +282,16 @@ class WorkerControlSession:
 
 
 
+def sum_range(start: int, end: int) -> int:
+    if not isinstance(start, int) or isinstance(start, bool):
+        raise ValueError("start must be an integer")
+    if not isinstance(end, int) or isinstance(end, bool):
+        raise ValueError("end must be an integer")
+    if not (0 <= start <= end <= 10000000):
+        raise ValueError("invalid range: 0 <= start <= end <= 10000000 required")
+    return sum(range(start, end + 1))
+
+
 def compute_retry_delay(attempt_number: int) -> float:
     if attempt_number <= 1:
         return 0.5
@@ -372,7 +383,7 @@ class WorkerSessionManager:
         log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_request", message["request_id"], "sent")
         return True
 
-    def process_inbound_message(self, message: dict) -> bool:
+    def process_inbound_message(self, message: dict) -> dict | bool:
         if not isinstance(message, dict) or not validate_message(message):
             return False
 
@@ -381,6 +392,7 @@ class WorkerSessionManager:
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
             if not payload:
                 return False
+
             self.busy = True
             self.current_task = {
                 "task_id": str(payload.get("task_id", "")),
@@ -394,7 +406,46 @@ class WorkerSessionManager:
             self.config["assignment_epoch"] = int(payload.get("assignment_epoch", self.config.get("assignment_epoch", 0)))
             self.config["loan_id"] = payload.get("loan_id")
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_assignment", message.get("request_id", "unknown"), "received")
-            return True
+
+            start = int(self.current_task["parameters"].get("start", 0))
+            end = int(self.current_task["parameters"].get("end", 0))
+            try:
+                total = sum_range(start, end)
+                status = "ok"
+                result = {"sum": total}
+                error_code = None
+            except ValueError:
+                status = "nok"
+                result = None
+                error_code = "invalid_range"
+
+            task_result = build_task_result_message(
+                message,
+                source={
+                    "group_label": str(self.config.get("group_label", "p2p-cluster")),
+                    "node_id": str(self.config.get("node_id", self.config.get("uuid", str(uuid.uuid4())))),
+                    "node_label": str(self.config.get("node_label", self.config.get("label", "worker-a"))),
+                    "node_role": str(self.config.get("node_role", "worker")),
+                },
+                destination={
+                    "group_label": str(message["source"]["group_label"]),
+                    "node_id": str(message["source"]["node_id"]),
+                    "node_label": str(message["source"]["node_label"]),
+                    "node_role": str(message["source"]["node_role"]),
+                },
+                task_id=str(self.current_task["task_id"]),
+                task_label=str(self.current_task["task_label"]),
+                attempt_id=str(self.current_task["attempt_id"]),
+                assignment_epoch=int(self.current_task["assignment_epoch"]),
+                loan_id=self.current_task["loan_id"],
+                status=status,
+                result=result,
+                error_code=error_code,
+            )
+            if self.current_session is not None:
+                self.current_session.send_message(task_result)
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_result", task_result["request_id"], status)
+            return task_result
 
         if msg_type == "no_task":
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
@@ -403,6 +454,31 @@ class WorkerSessionManager:
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "no_task", message.get("request_id", "unknown"), f"retry_after_ms={retry_after_ms}")
             return True
 
+        if msg_type == "task_ack":
+            return self.process_task_ack(message)
+
+        return False
+
+    def process_task_ack(self, message: dict) -> bool:
+        if not isinstance(message, dict) or not validate_message(message):
+            return False
+        if message.get("type") != "task_ack":
+            return False
+
+        payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+        task_id = payload.get("task_id")
+        attempt_id = payload.get("attempt_id")
+        accepted = payload.get("accepted")
+
+        if not isinstance(accepted, bool) or accepted is not True:
+            return False
+        if self.current_task is None:
+            return False
+        if str(task_id) == str(self.current_task.get("task_id")) and str(attempt_id) == str(self.current_task.get("attempt_id")):
+            self.busy = False
+            self.current_task = None
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+            return True
         return False
 
     def start_task_polling_loop(self, session: WorkerControlSession | None = None, interval_seconds: float = 0.5) -> threading.Thread | None:
@@ -414,8 +490,11 @@ class WorkerSessionManager:
         def loop() -> None:
             while not self.stop_event.is_set() and not session.is_closed():
                 if self.busy:
-                    if self.stop_event.wait(interval_seconds):
-                        break
+                    try:
+                        message = session.wait_for_message(types={"task_ack"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
+                    except TimeoutError:
+                        continue
+                    self.process_inbound_message(message)
                     continue
 
                 if time.monotonic() < self.next_task_ready_at:
@@ -426,7 +505,7 @@ class WorkerSessionManager:
 
                 self.request_task(session)
                 try:
-                    message = session.wait_for_message(types={"task_assignment", "no_task"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
+                    message = session.wait_for_message(types={"task_assignment", "no_task", "task_ack"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
                 except TimeoutError:
                     continue
                 self.process_inbound_message(message)

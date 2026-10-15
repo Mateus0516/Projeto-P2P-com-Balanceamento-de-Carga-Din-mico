@@ -968,6 +968,361 @@ def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
     assert set(registry.node_labels) == {"worker-a", "worker-b"}
 
 
+def test_sum_range_computes_expected_totals():
+    from worker.worker import sum_range
+
+    assert sum_range(0, 30) == 465
+    assert sum_range(5, 5) == 5
+    with pytest.raises(ValueError):
+        sum_range(10, 3)
+
+
+def test_worker_sends_task_result_and_master_acks_it():
+    from worker.worker import WorkerControlSession, WorkerSessionManager
+
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "assignment_epoch": 7,
+        "loan_id": None,
+    }
+    manager = WorkerSessionManager("127.0.0.1", 9000, config)
+    server_sock, client_sock = socket.socketpair()
+    try:
+        session = WorkerControlSession(client_sock)
+        manager._set_session(session)
+
+        assignment = {
+            "version": "sd_2026_2_v1",
+            "type": "task_assignment",
+            "message_id": "msg-task-assignment-1",
+            "request_id": "req-task-assignment-1",
+            "timestamp_ms": 1727170000128,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-a",
+                "node_role": "worker",
+            },
+            "payload": {
+                "task_id": "task-021",
+                "task_label": "task-0001",
+                "attempt_id": "attempt-abc",
+                "task_kind": "sum_range",
+                "parameters": {"start": 0, "end": 30},
+                "assignment_epoch": 7,
+                "loan_id": None,
+            },
+        }
+
+        result_message = manager.process_inbound_message(assignment)
+        assert result_message is not None
+        assert result_message["type"] == "task_result"
+        assert result_message["payload"]["task_id"] == "task-021"
+        assert result_message["payload"]["status"] == "ok"
+        assert result_message["payload"]["result"] == {"sum": 465}
+        assert result_message["payload"]["error_code"] is None
+
+        master_ack = {
+            "version": "sd_2026_2_v1",
+            "type": "task_ack",
+            "message_id": "msg-task-ack-1",
+            "request_id": result_message["request_id"],
+            "timestamp_ms": 1727170000130,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-a",
+                "node_role": "worker",
+            },
+            "payload": {
+                "task_id": "task-021",
+                "attempt_id": "attempt-abc",
+                "accepted": True,
+                "reason": "completed",
+            },
+        }
+        manager.process_task_ack(master_ack)
+        assert manager.busy is False
+        assert manager.current_task is None
+
+        raw = server_sock.recv(4096)
+        task_result = json.loads(raw.decode("utf-8").strip())
+        assert task_result["type"] == "task_result"
+        assert task_result["payload"]["status"] == "ok"
+    finally:
+        server_sock.close()
+        client_sock.close()
+
+
+def test_worker_resumes_polling_after_accepted_task_ack():
+    from worker.worker import WorkerControlSession, WorkerSessionManager
+
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-b",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9102,
+        "assignment_epoch": 3,
+        "loan_id": None,
+    }
+    manager = WorkerSessionManager("127.0.0.1", 9000, config)
+    server_sock, client_sock = socket.socketpair()
+    try:
+        session = WorkerControlSession(client_sock)
+        manager._set_session(session)
+        manager.stop_event.clear()
+
+        assignment = {
+            "version": "sd_2026_2_v1",
+            "type": "task_assignment",
+            "message_id": "msg-task-assignment-2",
+            "request_id": "req-task-assignment-2",
+            "timestamp_ms": 1727170000228,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-b",
+                "node_role": "worker",
+            },
+            "payload": {
+                "task_id": "task-022",
+                "task_label": "task-0002",
+                "attempt_id": "attempt-xyz",
+                "task_kind": "sum_range",
+                "parameters": {"start": 0, "end": 10},
+                "assignment_epoch": 3,
+                "loan_id": None,
+            },
+        }
+        task_ack = {
+            "version": "sd_2026_2_v1",
+            "type": "task_ack",
+            "message_id": "msg-task-ack-2",
+            "request_id": "req-task-assignment-2",
+            "timestamp_ms": 1727170000230,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-b",
+                "node_role": "worker",
+            },
+            "payload": {
+                "task_id": "task-022",
+                "attempt_id": "attempt-xyz",
+                "accepted": True,
+                "reason": "completed",
+            },
+        }
+
+        manager.start_task_polling_loop(session, interval_seconds=0.05)
+        session._queue.put(assignment)
+        time.sleep(0.25)
+        assert manager.busy is True
+
+        session._queue.put(task_ack)
+        time.sleep(0.30)
+
+        assert manager.busy is False
+        assert manager.current_task is None
+        manager.stop_event.set()
+    finally:
+        manager.stop_event.set()
+        server_sock.close()
+        client_sock.close()
+
+
+def test_worker_handles_two_consecutive_tasks():
+    from worker.worker import WorkerControlSession, WorkerSessionManager
+
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9101,
+        "assignment_epoch": 5,
+        "loan_id": None,
+    }
+    manager = WorkerSessionManager("127.0.0.1", 9000, config)
+    server_sock, client_sock = socket.socketpair()
+    try:
+        session = WorkerControlSession(client_sock)
+        manager._set_session(session)
+
+        assignment_one = {
+            "version": "sd_2026_2_v1",
+            "type": "task_assignment",
+            "message_id": "msg-task-assignment-3",
+            "request_id": "req-task-assignment-3",
+            "timestamp_ms": 1727170000300,
+            "source": {
+                "group_label": "p2p-cluster",
+                "node_id": "22222222-2222-4222-8222-222222222222",
+                "node_label": "master",
+                "node_role": "master",
+            },
+            "destination": {
+                "group_label": "p2p-cluster",
+                "node_id": "11111111-1111-4111-8111-111111111111",
+                "node_label": "worker-a",
+                "node_role": "worker",
+            },
+            "payload": {
+                "task_id": "task-030",
+                "task_label": "task-0003",
+                "attempt_id": "attempt-01",
+                "task_kind": "sum_range",
+                "parameters": {"start": 0, "end": 5},
+                "assignment_epoch": 5,
+                "loan_id": None,
+            },
+        }
+        assignment_two = {
+            **assignment_one,
+            "message_id": "msg-task-assignment-4",
+            "request_id": "req-task-assignment-4",
+            "payload": {
+                **assignment_one["payload"],
+                "task_id": "task-031",
+                "task_label": "task-0004",
+                "attempt_id": "attempt-02",
+                "parameters": {"start": 6, "end": 10},
+            },
+        }
+
+        result_one = manager.process_inbound_message(assignment_one)
+        assert result_one["type"] == "task_result"
+        ack_one = {
+            "version": "sd_2026_2_v1",
+            "type": "task_ack",
+            "message_id": "msg-task-ack-3",
+            "request_id": result_one["request_id"],
+            "timestamp_ms": 1727170000305,
+            "source": assignment_one["source"],
+            "destination": assignment_one["destination"],
+            "payload": {
+                "task_id": "task-030",
+                "attempt_id": "attempt-01",
+                "accepted": True,
+                "reason": "completed",
+            },
+        }
+        assert manager.process_task_ack(ack_one) is True
+        assert manager.busy is False
+
+        result_two = manager.process_inbound_message(assignment_two)
+        assert result_two["payload"]["result"] == {"sum": 40}
+        ack_two = {
+            **ack_one,
+            "message_id": "msg-task-ack-4",
+            "request_id": result_two["request_id"],
+            "payload": {
+                "task_id": "task-031",
+                "attempt_id": "attempt-02",
+                "accepted": True,
+                "reason": "completed",
+            },
+        }
+        assert manager.process_task_ack(ack_two) is True
+        assert manager.busy is False
+        assert manager.current_task is None
+    finally:
+        server_sock.close()
+        client_sock.close()
+
+
+def test_master_rejects_duplicate_task_result_and_counts_once():
+    from master.master import MasterTaskQueue
+
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    queue = MasterTaskQueue()
+    queue.submit({"task_id": "task-dup-1", "task_kind": "sum_range", "parameters": {"start": 0, "end": 10}})
+    assignment = queue.claim_next_task("worker-a", assignment_epoch=1, loan_id=None)
+    result = {
+        "version": "sd_2026_2_v1",
+        "type": "task_result",
+        "message_id": "msg-task-result-dup-a",
+        "request_id": "req-task-result-dup-a",
+        "timestamp_ms": 1727170000129,
+        "source": {
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        "destination": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        "payload": {
+            "task_id": "task-dup-1",
+            "task_label": assignment["task_label"],
+            "attempt_id": assignment["attempt_id"],
+            "assignment_epoch": 1,
+            "loan_id": None,
+            "status": "ok",
+            "result": {"sum": 55},
+            "error_code": None,
+        },
+    }
+
+    ack = handle_client.__globals__["build_task_ack_message"](result, source=master_identity, destination=result["source"], task_id="task-dup-1", attempt_id=assignment["attempt_id"], accepted=True, reason="completed")
+    assert ack["payload"]["accepted"] is True
+    assert queue.get_task("task-dup-1")["status"] == "completed"
+
+    duplicate = {**result, "message_id": "msg-task-result-dup-b", "request_id": "req-task-result-dup-b"}
+    duplicate_ack = handle_client.__globals__["build_task_ack_message"](duplicate, source=master_identity, destination=duplicate["source"], task_id="task-dup-1", attempt_id=assignment["attempt_id"], accepted=False, reason="duplicate result")
+    assert duplicate_ack["payload"]["accepted"] is False
+    assert duplicate_ack["payload"]["reason"] == "duplicate result"
+
+
 def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     registry = MasterRegistry()
     master_identity = {

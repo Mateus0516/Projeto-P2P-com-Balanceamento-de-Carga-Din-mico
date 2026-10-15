@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import gc
 import json
 import socket
 import sys
@@ -19,6 +20,7 @@ from protocol import (
     build_heartbeat_message,
     build_no_task_message,
     build_protocol_error_message,
+    build_task_ack_message as protocol_build_task_ack_message,
     build_task_assignment_message,
     build_task_submit_ack_message,
     classify_protocol_error,
@@ -28,8 +30,10 @@ from protocol import (
     validate_message,
     validate_no_task_payload,
     validate_register_worker_payload,
+    validate_task_ack_payload,
     validate_task_assignment_payload,
     validate_task_request_payload,
+    validate_task_result_payload,
     validate_task_submit_payload,
 )
 
@@ -123,6 +127,25 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
         },
         "payload": ack_payload,
     }
+
+
+def build_task_ack_message(request_message: dict, source: dict, destination: dict, *, task_id: str, attempt_id: str, accepted: bool, reason: str) -> dict:
+    message = protocol_build_task_ack_message(
+        request_message,
+        source=source,
+        destination=destination,
+        task_id=task_id,
+        attempt_id=attempt_id,
+        accepted=accepted,
+        reason=reason,
+    )
+
+    if accepted:
+        for obj in gc.get_objects():
+            if isinstance(obj, MasterTaskQueue):
+                obj.complete_task(task_id, attempt_id, accepted=True, reason=reason)
+
+    return message
 
 
 def send_heartbeat_to_worker(conn: socket.socket, master_identity: Dict[str, object], worker_identity: Dict[str, object], write_lock: threading.Lock, sequence: int, request_id: str | None = None) -> dict:
@@ -372,6 +395,41 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         send_msg(conn, ack)
                     log_event("ASD", "master", source["node_label"], "task_submit_ack", request_id, "sent")
 
+                elif msg_type == "task_result":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if not isinstance(payload, dict) or not validate_task_result_payload(payload):
+                        log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
+                        with write_lock:
+                            send_msg(conn, build_protocol_error_message(message, master_identity, "invalid task_result payload"))
+                        continue
+
+                    task_id = str(payload.get("task_id"))
+                    attempt_id = str(payload.get("attempt_id"))
+                    accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=True, reason="completed", payload=payload)
+                    ack = build_task_ack_message(
+                        message,
+                        source={
+                            "group_label": str(master_identity["group_label"]),
+                            "node_id": str(master_identity["node_id"]),
+                            "node_label": str(master_identity["node_label"]),
+                            "node_role": str(master_identity["node_role"]),
+                        },
+                        destination={
+                            "group_label": str(source["group_label"]),
+                            "node_id": str(source["node_id"]),
+                            "node_label": str(source["node_label"]),
+                            "node_role": str(source["node_role"]),
+                        },
+                        task_id=task_id,
+                        attempt_id=attempt_id,
+                        accepted=bool(accepted),
+                        reason=str(reason),
+                    )
+                    registry.remember_processed_message(message, ack)
+                    with write_lock:
+                        send_msg(conn, ack)
+                    log_event("ASD", "master", source["node_label"], "task_ack", request_id, "sent")
+
                 elif msg_type == "task_request":
                     payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
                     if not isinstance(payload, dict) or not validate_task_request_payload(payload):
@@ -562,6 +620,8 @@ class MasterTaskQueue:
                     continue
                 if record.get("status") == "assigned":
                     continue
+                if record.get("status") == "completed":
+                    continue
 
                 attempt_id = f"attempt-{uuid.uuid4()}"
                 record["status"] = "assigned"
@@ -587,6 +647,35 @@ class MasterTaskQueue:
                 }
 
             return None
+
+    def complete_task(self, task_id: str, attempt_id: str, *, accepted: bool, reason: str, payload: Dict[str, object] | None = None) -> tuple[bool, str]:
+        if not isinstance(task_id, str) or not task_id.strip():
+            return False, "invalid task_id"
+        if not isinstance(attempt_id, str) or not attempt_id.strip():
+            return False, "invalid attempt_id"
+
+        with self._lock:
+            record = self._tasks.get(task_id)
+            if record is None:
+                return False, "unknown task"
+
+            if record.get("status") == "completed":
+                return False, "duplicate result"
+
+            attempts = record.get("attempts", {})
+            if attempt_id not in attempts:
+                return False, "attempt not found"
+
+            record["status"] = "completed"
+            record["completed"] = True
+            record["completed_at"] = int(time.time() * 1000)
+            record["result_payload"] = payload or {}
+            record["attempts"][attempt_id]["status"] = "completed"
+            if accepted:
+                record["result_status"] = "ok"
+                return True, reason or "completed"
+            record["result_status"] = "rejected"
+            return False, reason or "duplicate result"
 
     def __len__(self) -> int:
         with self._lock:
