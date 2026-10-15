@@ -312,7 +312,9 @@ class WorkerSessionManager:
         self._loop_thread: threading.Thread | None = None
         self.busy = False
         self.current_task: Dict[str, object] | None = None
+        self.pending_results: Dict[str, Dict[str, object]] = {}
         self.next_task_ready_at = 0.0
+        self.result_retry_interval = 0.25
 
     @property
     def current_session(self) -> WorkerControlSession | None:
@@ -383,6 +385,56 @@ class WorkerSessionManager:
         log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_request", message["request_id"], "sent")
         return True
 
+    def _pending_result_key(self, task_id: str, attempt_id: str) -> str:
+        return f"{str(task_id)}::{str(attempt_id)}"
+
+    def _remember_pending_result(self, task_result: dict) -> None:
+        if not isinstance(task_result, dict):
+            return
+        payload = task_result.get("payload", {}) if isinstance(task_result.get("payload", {}), dict) else {}
+        task_id = payload.get("task_id")
+        attempt_id = payload.get("attempt_id")
+        if not isinstance(task_id, str) or not task_id.strip() or not isinstance(attempt_id, str) or not attempt_id.strip():
+            return
+        key = self._pending_result_key(task_id, attempt_id)
+        with self._lock:
+            self.pending_results[key] = {
+                "task_id": str(task_id),
+                "attempt_id": str(attempt_id),
+                "message": dict(task_result),
+                "last_sent_at": time.monotonic(),
+                "send_count": 1,
+            }
+
+    def _drop_pending_result(self, task_id: str, attempt_id: str) -> None:
+        key = self._pending_result_key(task_id, attempt_id)
+        with self._lock:
+            self.pending_results.pop(key, None)
+
+    def retransmit_pending_results(self, session: WorkerControlSession | None = None) -> int:
+        if session is None:
+            session = self.current_session
+        if session is None or session.is_closed():
+            return 0
+
+        with self._lock:
+            pending = list(self.pending_results.values())
+
+        sent = 0
+        for item in pending:
+            message = item.get("message")
+            if not isinstance(message, dict):
+                continue
+            session.send_message(message)
+            sent += 1
+            with self._lock:
+                key = self._pending_result_key(str(item.get("task_id", "")), str(item.get("attempt_id", "")))
+                existing = self.pending_results.get(key)
+                if existing is not None:
+                    existing["last_sent_at"] = time.monotonic()
+                    existing["send_count"] = int(existing.get("send_count", 1)) + 1
+        return sent
+
     def process_inbound_message(self, message: dict) -> dict | bool:
         if not isinstance(message, dict) or not validate_message(message):
             return False
@@ -442,6 +494,7 @@ class WorkerSessionManager:
                 result=result,
                 error_code=error_code,
             )
+            self._remember_pending_result(task_result)
             if self.current_session is not None:
                 self.current_session.send_message(task_result)
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_result", task_result["request_id"], status)
@@ -469,14 +522,39 @@ class WorkerSessionManager:
         task_id = payload.get("task_id")
         attempt_id = payload.get("attempt_id")
         accepted = payload.get("accepted")
+        reason = payload.get("reason")
+
+        if not isinstance(task_id, str) or not task_id.strip() or not isinstance(attempt_id, str) or not attempt_id.strip():
+            return False
+
+        if accepted is False and reason == "stale_attempt":
+            self._drop_pending_result(task_id, attempt_id)
+            if self.current_task is not None and str(task_id) == str(self.current_task.get("task_id")) and str(attempt_id) == str(self.current_task.get("attempt_id")):
+                self.busy = False
+                self.current_task = None
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "stale_attempt")
+            return False
 
         if not isinstance(accepted, bool) or accepted is not True:
             return False
+
+        key = self._pending_result_key(task_id, attempt_id)
+        pending_match = key in self.pending_results
         if self.current_task is None:
+            if pending_match:
+                self._drop_pending_result(task_id, attempt_id)
+                log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+                return True
             return False
+
         if str(task_id) == str(self.current_task.get("task_id")) and str(attempt_id) == str(self.current_task.get("attempt_id")):
+            self._drop_pending_result(task_id, attempt_id)
             self.busy = False
             self.current_task = None
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
+            return True
+        if pending_match:
+            self._drop_pending_result(task_id, attempt_id)
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_ack", message.get("request_id", "unknown"), "completed")
             return True
         return False
@@ -490,6 +568,8 @@ class WorkerSessionManager:
         def loop() -> None:
             while not self.stop_event.is_set() and not session.is_closed():
                 if self.busy:
+                    if self.pending_results:
+                        self.retransmit_pending_results(session)
                     try:
                         message = session.wait_for_message(types={"task_ack"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
                     except TimeoutError:
@@ -544,6 +624,7 @@ class WorkerSessionManager:
             attempt = 0
             self._set_session(session)
             self._start_heartbeat_for_session(session)
+            self.retransmit_pending_results(session)
             self.start_task_polling_loop(session)
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "reconnect", "-", "established")
 
