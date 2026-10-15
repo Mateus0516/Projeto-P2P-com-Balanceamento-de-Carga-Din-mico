@@ -209,6 +209,16 @@ class WorkerControlSession:
                 if not validate_message(message):
                     continue
 
+                request_id = message.get("request_id", "unknown")
+                log_event(
+                    "ASD",
+                    message.get("source", {}).get("node_label", "unknown"),
+                    message.get("destination", {}).get("node_label", "unknown"),
+                    message.get("type", "unknown"),
+                    request_id,
+                    "received",
+                )
+
                 if message.get("type") == "heartbeat":
                     ack = build_heartbeat_ack_message(message, source={
                         "group_label": message["destination"]["group_label"],
@@ -562,7 +572,7 @@ def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> No
         threading.Thread(target=handle_connection, args=(conn, addr), daemon=True).start()
 
 
-if __name__ == "__main__":
+def main() -> None:
     parser = argparse.ArgumentParser(description="Worker node for NDJSON registration protocol")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
     parser.add_argument("--host", default="127.0.0.1")
@@ -578,15 +588,9 @@ if __name__ == "__main__":
         config["port"] = args.port
     config["master"] = _normalize_master_identity({"master": config.get("master")}, default_host=args.master_host, default_port=args.master_port)
 
-    node_label = str(config.get("node_label", config.get("label", "worker-a")))
-    worker_identity = {
-        "group_label": str(config.get("group_label", "p2p-cluster")),
-        "node_id": str(config.get("node_id", config.get("uuid", str(uuid.uuid4())))),
-        "node_label": node_label,
-        "node_role": str(config.get("node_role", "worker")),
-    }
-    listener_thread = threading.Thread(target=run_listener, args=(config["host"], config["port"], worker_identity), daemon=True)
-    listener_thread.start()
-
     stop_event = threading.Event()
     run_worker(args.master_host, args.master_port, config, stop_event=stop_event)
+
+
+if __name__ == "__main__":
+    main()

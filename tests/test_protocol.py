@@ -1,5 +1,6 @@
 import json
 import socket
+import sys
 import threading
 import time
 import uuid
@@ -1951,6 +1952,83 @@ def test_worker_session_manager_stops_when_explicitly_stopped():
     stop_event.set()
     manager = WorkerSessionManager("127.0.0.1", 1, config, stop_event=stop_event, retry_delay_factory=lambda _: 0.01)
     assert manager.start() is None
+
+
+def test_worker_main_does_not_start_fixed_listener(monkeypatch, tmp_path):
+    config = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "worker-f",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 0,
+        "assignment_epoch": 0,
+        "loan_id": None,
+        "master": {
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+            "host": "127.0.0.1",
+            "port": 9000,
+        },
+    }
+    seen = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), **kwargs):
+            self.target = target
+            self.args = args
+            self.kwargs = kwargs
+            seen.append(getattr(target, "__name__", str(target)))
+
+        def start(self):
+            return None
+
+        def join(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(worker_module, "load_or_create_config", lambda path: config)
+    monkeypatch.setattr(worker_module, "run_worker", lambda *args, **kwargs: seen.append("run_worker") or None)
+    monkeypatch.setattr(worker_module.threading, "Thread", DummyThread)
+    monkeypatch.setattr(sys, "argv", ["worker.py", "--config", str(tmp_path / "worker-f.json")])
+
+    worker_module.main()
+
+    assert "run_listener" not in seen
+    assert "run_worker" in seen
+
+
+def test_received_log_uses_real_request_id(monkeypatch):
+    received = {}
+    heartbeat = build_heartbeat_message(
+        source={
+            "group_label": "p2p-cluster",
+            "node_id": "11111111-1111-4111-8111-111111111111",
+            "node_label": "worker-a",
+            "node_role": "worker",
+        },
+        destination={
+            "group_label": "p2p-cluster",
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        },
+        sequence=12,
+        request_id="req-real-12",
+    )
+    ack = build_heartbeat_ack_message(heartbeat, source=heartbeat["destination"], destination=heartbeat["source"])
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+    monkeypatch.setattr(worker_module, "log_event", lambda *args: received.setdefault("args", args))
+
+    try:
+        send_msg(server_sock, ack)
+        assert session.wait_for_message(types={"heartbeat_ack"}, request_id="req-real-12", timeout=1)["request_id"] == "req-real-12"
+        assert received["args"][4] == "req-real-12"
+    finally:
+        session.close()
+        server_sock.close()
 
 
 def test_worker_heartbeat_resumes_after_reconnect():
