@@ -113,8 +113,8 @@ def test_valid_task_submit_message_is_accepted_by_protocol():
     message = {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": "msg-task-submit-1",
-        "request_id": "req-task-submit-1",
+        "message_id": "11111111-1111-4111-8111-111111111111",
+        "request_id": "22222222-2222-4222-8222-222222222222",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -141,8 +141,8 @@ def test_invalid_task_submit_message_is_rejected_by_protocol():
     message = {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": "msg-task-submit-2",
-        "request_id": "req-task-submit-2",
+        "message_id": "c8beebf1-fe69-4b64-856a-f63b0bf60da4",
+        "request_id": "9924b97d-d844-4a6b-abdc-598e1e753aa8",
         "timestamp_ms": 1727170000124,
         "source": {
             "group_label": "p2p-cluster",
@@ -169,8 +169,8 @@ def test_task_submit_ack_message_matches_protocol_contract():
     message = {
         "version": "sd_2026_2_v1",
         "type": "task_submit_ack",
-        "message_id": "msg-task-submit-ack-1",
-        "request_id": "req-task-submit-ack-1",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
         "timestamp_ms": 1727170000125,
         "source": {
             "group_label": "p2p-cluster",
@@ -198,8 +198,8 @@ def test_task_request_assignment_and_no_task_messages_match_protocol_contract():
     task_request = {
         "version": "sd_2026_2_v1",
         "type": "task_request",
-        "message_id": "msg-task-request-1",
-        "request_id": "req-task-request-1",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
         "timestamp_ms": 1727170000127,
         "source": {
             "group_label": "p2p-cluster",
@@ -218,8 +218,8 @@ def test_task_request_assignment_and_no_task_messages_match_protocol_contract():
     task_assignment = {
         "version": "sd_2026_2_v1",
         "type": "task_assignment",
-        "message_id": "msg-task-assignment-1",
-        "request_id": "req-task-assignment-1",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
         "timestamp_ms": 1727170000128,
         "source": {
             "group_label": "p2p-cluster",
@@ -246,8 +246,8 @@ def test_task_request_assignment_and_no_task_messages_match_protocol_contract():
     no_task = {
         "version": "sd_2026_2_v1",
         "type": "no_task",
-        "message_id": "msg-no-task-1",
-        "request_id": "req-no-task-1",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
         "timestamp_ms": 1727170000129,
         "source": {
             "group_label": "p2p-cluster",
@@ -273,8 +273,8 @@ def test_task_submit_range_limits_and_sprint1_compatibility():
     valid = {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": "msg-task-submit-3",
-        "request_id": "req-task-submit-3",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
         "timestamp_ms": 1727170000126,
         "source": {
             "group_label": "p2p-cluster",
@@ -316,7 +316,7 @@ def test_task_submit_range_limits_and_sprint1_compatibility():
             "node_role": "master",
         },
         sequence=5,
-        request_id="req-heartbeat-compat",
+        request_id=str(uuid.uuid4()),
     )
 
     assert validate_message(valid) is True
@@ -438,8 +438,8 @@ def test_master_task_request_returns_no_task_for_unregistered_worker_and_task_as
     unregistered = {
         "version": "sd_2026_2_v1",
         "type": "task_request",
-        "message_id": "msg-task-request-unknown",
-        "request_id": "req-task-request-unknown",
+        "message_id": "1aab0392-39ee-48dc-b6ec-263ef279ae64",
+        "request_id": "1f9ae44f-31d6-4574-86e5-b52e089593c9",
         "timestamp_ms": 1727170000130,
         "source": {
             "group_label": "p2p-cluster",
@@ -478,8 +478,8 @@ def test_master_task_request_returns_no_task_for_unregistered_worker_and_task_as
             "node_label": "worker-a",
             "node_role": "worker",
         },
-        "message_id": "msg-task-request-known",
-        "request_id": "req-task-request-known",
+        "message_id": "f298b5ca-c846-45b3-9256-737ba18f5ffa",
+        "request_id": "dda62732-3f97-47b1-9a30-e18edfcd2a9b",
     }
     registered_reply = exchange(registered)
     assert registered_reply is not None
@@ -863,7 +863,7 @@ def test_client_builds_valid_task_submit_message_using_protocol_contract():
             "task_kind": "sum_range",
             "parameters": {"start": 3, "end": 9},
         },
-        request_id="req-client-task-001",
+        request_id="a270a527-a7d7-40bd-b3bf-d8b22f62a2da",
     )
 
     assert validate_message(message) is True
@@ -895,7 +895,7 @@ def test_client_submit_task_round_trip_and_ack_is_printable():
             ack = {
                 "version": "sd_2026_2_v1",
                 "type": "task_submit_ack",
-                "message_id": "msg-client-ack-1",
+                "message_id": "384db959-1d4b-473c-8c02-ff6904c34687",
                 "request_id": payload["request_id"],
                 "timestamp_ms": 1727170000123,
                 "source": {
@@ -986,8 +986,8 @@ def test_worker_session_manager_respects_retry_after_no_task():
     no_task = {
         "version": "sd_2026_2_v1",
         "type": "no_task",
-        "message_id": "msg-no-task-1",
-        "request_id": "req-no-task-1",
+        "message_id": "b80d1fe6-ea47-46d2-8474-cfc83b5284bd",
+        "request_id": "829bc052-5e97-4432-bd7b-f61dccf1e11e",
         "timestamp_ms": 1727170000129,
         "source": {
             "group_label": "p2p-cluster",
@@ -1025,8 +1025,8 @@ def test_worker_session_manager_marks_busy_on_assignment_and_blocks_new_requests
     assignment = {
         "version": "sd_2026_2_v1",
         "type": "task_assignment",
-        "message_id": "msg-task-assignment-1",
-        "request_id": "req-task-assignment-1",
+        "message_id": "b0162e6a-8334-45c2-a90a-e21b8532f908",
+        "request_id": "a47ca1c8-a881-495a-a098-a5da7640f7fc",
         "timestamp_ms": 1727170000128,
         "source": {
             "group_label": "p2p-cluster",
@@ -1219,8 +1219,8 @@ def test_master_handles_task_submit_round_trip_and_conflict_over_tcp():
     message = {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": "msg-task-submit-1",
-        "request_id": "req-task-submit-1",
+        "message_id": "4de2961f-2225-44d4-80fd-a930b7d676b8",
+        "request_id": "1e7ecbdd-0a11-4d0f-b501-8e59aaab36a6",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -1251,8 +1251,8 @@ def test_master_handles_task_submit_round_trip_and_conflict_over_tcp():
 
     conflict_message = {
         **message,
-        "message_id": "msg-task-submit-conflict",
-        "request_id": "req-task-submit-conflict",
+        "message_id": "2514bdad-7518-492b-bac6-105465b8072e",
+        "request_id": "5c60a982-75a3-4130-840a-d7150c9999a6",
         "payload": {
             "task_id": "tcp-task-001",
             "task_kind": "sum_range",
@@ -1296,8 +1296,8 @@ def test_master_returns_protocol_error_for_invalid_task_submit_over_tcp():
     invalid = {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": "msg-task-submit-invalid",
-        "request_id": "req-task-submit-invalid",
+        "message_id": "063c325d-02fa-438a-b440-e870197a9369",
+        "request_id": "c8222893-f688-4e45-be17-84eedfb3cc78",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -1414,8 +1414,8 @@ def test_worker_sends_task_result_and_master_acks_it():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-1",
-            "request_id": "req-task-assignment-1",
+            "message_id": "b0162e6a-8334-45c2-a90a-e21b8532f908",
+            "request_id": "a47ca1c8-a881-495a-a098-a5da7640f7fc",
             "timestamp_ms": 1727170000128,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1451,7 +1451,7 @@ def test_worker_sends_task_result_and_master_acks_it():
         master_ack = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-1",
+            "message_id": "1950c83a-b9f2-4da1-ae3e-a60313aebba2",
             "request_id": result_message["request_id"],
             "timestamp_ms": 1727170000130,
             "source": {
@@ -1509,8 +1509,8 @@ def test_worker_resumes_polling_after_accepted_task_ack():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-2",
-            "request_id": "req-task-assignment-2",
+            "message_id": "08fd627f-a80c-49be-9565-906e9d8242c8",
+            "request_id": "0f8421ab-9ab1-4863-89ac-22525bb78998",
             "timestamp_ms": 1727170000228,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1537,8 +1537,8 @@ def test_worker_resumes_polling_after_accepted_task_ack():
         task_ack = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-2",
-            "request_id": "req-task-assignment-2",
+            "message_id": "b000cc11-3de7-4e8b-a076-256d48045285",
+            "request_id": "0f8421ab-9ab1-4863-89ac-22525bb78998",
             "timestamp_ms": 1727170000230,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1600,8 +1600,8 @@ def test_worker_clears_task_request_pending_on_no_task_and_ack():
         no_task = {
             "version": "sd_2026_2_v1",
             "type": "no_task",
-            "message_id": "msg-no-task-pending",
-            "request_id": "req-no-task-pending",
+            "message_id": "fa494687-0cff-4d8b-bbe7-2699296bf3f8",
+            "request_id": "5239299c-ab19-46a9-92c9-38c360f1e529",
             "timestamp_ms": 1727170000500,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1630,8 +1630,8 @@ def test_worker_clears_task_request_pending_on_no_task_and_ack():
         ack = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-pending",
-            "request_id": "req-task-pending-ack",
+            "message_id": "29e57aad-9481-41c0-a0f4-ab353d2d06cb",
+            "request_id": "91712a7b-2542-48df-9267-5981b452d7da",
             "timestamp_ms": 1727170000510,
             "source": no_task["source"],
             "destination": no_task["destination"],
@@ -1691,8 +1691,8 @@ def test_worker_handles_two_consecutive_tasks():
         assignment_one = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-3",
-            "request_id": "req-task-assignment-3",
+            "message_id": "928dec5d-c0b2-417c-af01-ded315271690",
+            "request_id": "5258310e-e065-4ec6-a8de-95a12711fef6",
             "timestamp_ms": 1727170000300,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1718,8 +1718,8 @@ def test_worker_handles_two_consecutive_tasks():
         }
         assignment_two = {
             **assignment_one,
-            "message_id": "msg-task-assignment-4",
-            "request_id": "req-task-assignment-4",
+            "message_id": "4dbbd8ad-faeb-4c00-98a2-f28d8994a13f",
+            "request_id": "4ded63bf-42a5-45d6-85f9-4dbd72e27b5d",
             "payload": {
                 **assignment_one["payload"],
                 "task_id": "task-031",
@@ -1734,7 +1734,7 @@ def test_worker_handles_two_consecutive_tasks():
         ack_one = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-3",
+            "message_id": "f41cb385-a867-4dde-ba16-5bc94308819f",
             "request_id": result_one["request_id"],
             "timestamp_ms": 1727170000305,
             "source": assignment_one["source"],
@@ -1753,7 +1753,7 @@ def test_worker_handles_two_consecutive_tasks():
         assert result_two["payload"]["result"] == {"sum": 40}
         ack_two = {
             **ack_one,
-            "message_id": "msg-task-ack-4",
+            "message_id": "5456fd95-de8e-4a18-a365-6bdf9a7d63bc",
             "request_id": result_two["request_id"],
             "payload": {
                 "task_id": "task-031",
@@ -1792,8 +1792,8 @@ def test_worker_retransmits_pending_result_without_recalculating():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-retry-",
-            "request_id": "req-task-assignment-retry",
+            "message_id": "8e8cf42e-a3b0-45de-85c8-d627dfd270b5",
+            "request_id": "42fe9737-501f-470a-8797-19ae558c0bcb",
             "timestamp_ms": 1727170000400,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1837,7 +1837,7 @@ def test_worker_retransmits_pending_result_without_recalculating():
         ack = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-retry",
+            "message_id": "b1881628-06ab-4727-b9d6-a568da3841b7",
             "request_id": sent["request_id"],
             "timestamp_ms": 1727170000410,
             "source": assignment["source"],
@@ -1877,8 +1877,8 @@ def test_worker_accepts_positive_duplicate_ack_for_retransmitted_result():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-duplicate-ack",
-            "request_id": "req-task-assignment-duplicate-ack",
+            "message_id": "06600f6f-f439-4a2d-bd76-a9ab488be5d5",
+            "request_id": "16af4887-c352-4bb9-b8cf-46c4e8226642",
             "timestamp_ms": 1727170000700,
             "source": {
                 "group_label": "p2p-cluster",
@@ -1910,7 +1910,7 @@ def test_worker_accepts_positive_duplicate_ack_for_retransmitted_result():
         ack = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-duplicate-ack",
+            "message_id": "f04f8f47-05ad-460a-90a8-b7a7ac9ef24b",
             "request_id": result["request_id"],
             "timestamp_ms": 1727170000710,
             "source": assignment["source"],
@@ -1951,8 +1951,8 @@ def test_worker_replays_pending_result_after_reconnect():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-reconnect",
-            "request_id": "req-task-assignment-reconnect",
+            "message_id": "056a7a3d-1fb8-458d-ae47-ed62e526c922",
+            "request_id": "5d80ae21-b5e8-4ec3-9104-976a13134541",
             "timestamp_ms": 1727170000500,
             "source": {
                 "group_label": "p2p-cluster",
@@ -2018,8 +2018,8 @@ def test_worker_stops_retransmitting_when_master_rejects_stale_attempt():
         assignment = {
             "version": "sd_2026_2_v1",
             "type": "task_assignment",
-            "message_id": "msg-task-assignment-stale",
-            "request_id": "req-task-assignment-stale",
+            "message_id": "c5d5a319-ae07-43d0-a310-08953303b279",
+            "request_id": "f3c33877-69f0-4148-9a9d-40776236d98a",
             "timestamp_ms": 1727170000600,
             "source": {
                 "group_label": "p2p-cluster",
@@ -2050,7 +2050,7 @@ def test_worker_stops_retransmitting_when_master_rejects_stale_attempt():
         stale = {
             "version": "sd_2026_2_v1",
             "type": "task_ack",
-            "message_id": "msg-task-ack-stale",
+            "message_id": "f37ea86b-0158-4d83-a6b9-dc2bab71ce83",
             "request_id": sent["request_id"],
             "timestamp_ms": 1727170000610,
             "source": assignment["source"],
@@ -2115,8 +2115,8 @@ def test_master_runtime_reassigns_task_after_worker_disconnect():
     registration_message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-reg-runtime-disconnect",
-        "request_id": "req-reg-runtime-disconnect",
+        "message_id": "fc997ae3-1eed-4375-bb0f-d9337ff35af2",
+        "request_id": "bf9aeed4-fa72-44bc-950c-138d0cb3cf7b",
         "timestamp_ms": int(time.time() * 1000),
         "source": {
             **worker_identity,
@@ -2311,7 +2311,7 @@ def test_metrics_request_and_response_messages_match_protocol_contract():
         "node_role": "master",
     }
 
-    request = build_metrics_request_message(collector, master, request_id="req-metrics-1")
+    request = build_metrics_request_message(collector, master, request_id="74f7e687-53d7-43bf-95f9-24f6e32a238f")
     assert validate_message(request) is True
     snapshot = {
         "total_tasks": 2,
@@ -2329,7 +2329,7 @@ def test_metrics_request_and_response_messages_match_protocol_contract():
     }
     response = build_metrics_response_message(request, master, collector, metrics=snapshot)
     assert validate_message(response) is True
-    assert response["request_id"] == "req-metrics-1"
+    assert response["request_id"] == "74f7e687-53d7-43bf-95f9-24f6e32a238f"
     assert response["payload"] == snapshot
 
 
@@ -2362,13 +2362,13 @@ def test_master_responds_to_metrics_request_without_changing_task_state():
         )
         thread.start()
 
-        request = build_metrics_request_message(collector_identity, master_identity, request_id="req-metrics-query")
+        request = build_metrics_request_message(collector_identity, master_identity, request_id="4255db65-bb39-4668-b203-f0deda7970d0")
         send_msg(client_sock, request)
         messages = recv_msgs(client_sock, bytearray())
         assert messages is not None and any(msg.get("type") == "metrics_response" for msg in messages)
 
         response = next(msg for msg in messages if msg.get("type") == "metrics_response")
-        assert response["request_id"] == "req-metrics-query"
+        assert response["request_id"] == "4255db65-bb39-4668-b203-f0deda7970d0"
         assert response["payload"] == before
         assert queue.snapshot() == before
     finally:
@@ -2754,7 +2754,7 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     missing_field = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-missing-field",
+        "message_id": "80e71052-a436-4888-9de5-1482a3df0a0f",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -2773,8 +2773,8 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     wrong_capitalization = {
         "version": "sd_2026_2_v1",
         "Type": "register_worker",
-        "message_id": "msg-capitalized",
-        "request_id": "req-capitalized",
+        "message_id": "89a240c7-7176-4568-92a4-2b4d404f4b2f",
+        "request_id": "88512301-81de-4dc2-a7be-84a699a12e6d",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -2793,8 +2793,8 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     unknown_type = {
         "version": "sd_2026_2_v1",
         "type": "unknown_event",
-        "message_id": "msg-unknown-type",
-        "request_id": "req-unknown-type",
+        "message_id": "c7ceb31c-3263-4003-a3d1-4f222fc38afe",
+        "request_id": "e02ddeea-709c-4edf-88de-737e78b4e400",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -2813,8 +2813,8 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     unknown_version = {
         "version": "sd_2026_2_v99",
         "type": "register_worker",
-        "message_id": "msg-unknown-version",
-        "request_id": "req-unknown-version",
+        "message_id": "48c18c15-e509-48f0-83cb-2d53cc5a4f29",
+        "request_id": "1be08558-c30c-4ee4-9e98-d8d08f53cbee",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -2843,8 +2843,8 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     valid_message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-valid-after-invalid",
-        "request_id": "req-valid-after-invalid",
+        "message_id": "f75b01d1-57b2-48d5-9550-1f063234d331",
+        "request_id": "99c8b37a-04b5-44a9-b430-ef0f848ddfc3",
         "timestamp_ms": 1727170000456,
         "source": {
             "group_label": "p2p-cluster",
@@ -2881,8 +2881,8 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
         {
             "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "message_id": "m1",
-            "request_id": "r1",
+            "message_id": "a9e9e9bb-8a9d-497a-9c48-24bc05ac8415",
+            "request_id": "e909535b-7d5b-4b06-8ed2-d50a92e06af9",
             "timestamp_ms": 1727170000123,
             "source": {
                 "group_label": "p2p-cluster",
@@ -2901,8 +2901,8 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
         {
             "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "message_id": "m2",
-            "request_id": "r2",
+            "message_id": "2bbae45b-2e14-4b9e-9b01-3a293f8f60b0",
+            "request_id": "3eb301ff-e43b-499f-b3a0-0143c096b826",
             "timestamp_ms": 1727170002234,
             "source": {
                 "group_label": "p2p-cluster",
@@ -2921,8 +2921,8 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
         {
             "version": "sd_2026_2_v1",
             "type": "register_worker",
-            "message_id": "m3",
-            "request_id": "r3",
+            "message_id": "a2279565-d992-4a7a-9604-f1c513902789",
+            "request_id": "875f6a91-d774-44d6-ac19-0744942d927b",
             "timestamp_ms": 1727170003456,
             "source": {
                 "group_label": "p2p-cluster",
@@ -2963,7 +2963,7 @@ def test_ct_01_ndjson_tcp_framing_acceptance():
 
     assert len(received) == 3
     assert all(validate_message(message) for message in received)
-    assert [message["message_id"] for message in received] == ["m1", "m2", "m3"]
+    assert [message["message_id"] for message in received] == ["a9e9e9bb-8a9d-497a-9c48-24bc05ac8415", "2bbae45b-2e14-4b9e-9b01-3a293f8f60b0", "a2279565-d992-4a7a-9604-f1c513902789"]
     assert received[0]["source"]["node_label"] == "worker-a"
     assert received[1]["source"]["node_label"] == "worker-b"
     assert received[2]["source"]["node_label"] == "worker-c"
@@ -2973,8 +2973,8 @@ def test_validate_message_rejects_missing_required_fields():
     invalid = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "m1",
-        "request_id": "r1",
+        "message_id": "a9e9e9bb-8a9d-497a-9c48-24bc05ac8415",
+        "request_id": "e909535b-7d5b-4b06-8ed2-d50a92e06af9",
         "timestamp_ms": 1727170000123,
     }
     assert validate_message(invalid) is False
@@ -2982,8 +2982,8 @@ def test_validate_message_rejects_missing_required_fields():
     valid = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "m1",
-        "request_id": "r1",
+        "message_id": "a9e9e9bb-8a9d-497a-9c48-24bc05ac8415",
+        "request_id": "e909535b-7d5b-4b06-8ed2-d50a92e06af9",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3203,8 +3203,8 @@ def test_validate_message_accepts_sd_2026_2_v1_envelope():
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-001",
-        "request_id": "req-001",
+        "message_id": "479ebeeb-d552-450f-9495-2237faa44bf0",
+        "request_id": "b0ad8650-d07a-4124-bc94-05d999f3b7a6",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3249,8 +3249,8 @@ def test_register_worker_payload_requires_home_master_assignment_and_loan_id(tmp
     valid_request = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-contract-valid",
-        "request_id": "req-contract-valid",
+        "message_id": "19edbe28-5188-470f-af37-f3553d92a2a7",
+        "request_id": "080295ae-d6db-4c38-9f76-f1b438ef2d58",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3330,8 +3330,8 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
     rejected_request = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-reject-1",
-        "request_id": "req-reject-1",
+        "message_id": "c1f7d491-2caf-4b9b-85a1-da5e0226cfb8",
+        "request_id": "8ec5d309-20ef-41af-8067-48449cd9509d",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "other-group",
@@ -3356,8 +3356,8 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
     accepted_request = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-accept-1",
-        "request_id": "req-accept-1",
+        "message_id": "185e670a-1494-49ad-b3ed-4241e9fe85b7",
+        "request_id": "6f842f78-25e3-4d1d-9046-0f73c80c8f2c",
         "timestamp_ms": 1727170000456,
         "source": {
             "group_label": "p2p-cluster",
@@ -3395,7 +3395,7 @@ def test_heartbeat_messages_follow_sd_2026_2_v1_and_correlate_sequence():
             "node_role": "master",
         },
         sequence=7,
-        request_id="req-heart-7",
+        request_id="abfeeefc-3b2b-4621-be0e-fb93628608ea",
         assignment_epoch=0,
     )
     ack = build_heartbeat_ack_message(heart, source={
@@ -3436,7 +3436,7 @@ def test_worker_heartbeat_uses_current_assignment_epoch_from_config_and_preserve
             "node_role": "master",
         },
         sequence=12,
-        request_id="req-heart-config-3",
+        request_id="63208bb3-4336-4dee-ad6a-18438f1c6edb",
         assignment_epoch=config["assignment_epoch"],
     )
     retry_copy = dict(heart)
@@ -3451,8 +3451,8 @@ def test_heartbeat_rejects_invalid_assignment_epoch_values():
     base = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "msg-heart-invalid-assignment",
-        "request_id": "req-heart-invalid-assignment",
+        "message_id": "0a6cea38-ed63-4311-8e6c-3403e438874d",
+        "request_id": "b82174b0-3b72-44ec-989f-5e9b0a4f8e9b",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3489,7 +3489,7 @@ def test_valid_heartbeat_still_produces_heartbeat_ack_when_assignment_epoch_is_p
             "node_role": "master",
         },
         sequence=5,
-        request_id="req-heart-valid-ack",
+        request_id="adf701e0-aff3-4e37-a6c0-7ed47a135884",
         assignment_epoch=0,
     )
 
@@ -3529,8 +3529,8 @@ def test_master_replies_to_worker_heartbeat():
     heartbeat = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "hb-1",
-        "request_id": "req-hb-1",
+        "message_id": str(uuid.uuid4()),
+        "request_id": "9453cc97-cbd3-4c29-ad18-ef667d2ebfe4",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3558,8 +3558,8 @@ def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     request = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-req",
-        "request_id": "req-ack",
+        "message_id": "34999f89-49ad-412d-8088-14e19f5b05b2",
+        "request_id": "a172085d-80a9-427a-a81e-edca66919920",
         "timestamp_ms": 1727170000123,
         "source": {
             "group_label": "p2p-cluster",
@@ -3612,12 +3612,12 @@ def test_master_send_heartbeat_uses_existing_socket_and_preserves_sequence():
     }
     write_lock = threading.Lock()
 
-    send_heartbeat_to_worker(server_sock, master_identity, worker_identity, write_lock, sequence=21, request_id="req-master-heart-21")
+    send_heartbeat_to_worker(server_sock, master_identity, worker_identity, write_lock, sequence=21, request_id="5aa00756-ba74-4d55-9aaf-fbc70bd2b500")
     raw = client_sock.recv(4096)
     message = json.loads(raw.decode("utf-8").strip())
 
     assert message["type"] == "heartbeat"
-    assert message["request_id"] == "req-master-heart-21"
+    assert message["request_id"] == "5aa00756-ba74-4d55-9aaf-fbc70bd2b500"
     assert message["payload"]["sequence"] == 21
     assert message["source"]["node_label"] == "master"
     assert message["destination"]["node_label"] == "worker-a"
@@ -3641,13 +3641,13 @@ def test_worker_control_session_reuses_one_socket_for_successive_heartbeats():
             "node_role": "master",
         },
         sequence=11,
-        request_id="req-hb-11",
+        request_id="7cb5cb3c-6fe8-41f7-9e96-47fd2662a02b",
     )
     heartbeat_two = build_heartbeat_message(
         source=heartbeat_one["source"],
         destination=heartbeat_one["destination"],
         sequence=12,
-        request_id="req-hb-12",
+        request_id="857adaea-d0ce-488a-9bac-6c46c8219405",
     )
 
     session.send_message(heartbeat_one)
@@ -3659,8 +3659,8 @@ def test_worker_control_session_reuses_one_socket_for_successive_heartbeats():
     send_msg(server_sock, first_ack)
     send_msg(server_sock, second_ack)
 
-    first_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-11", timeout=2)
-    second_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-12", timeout=2)
+    first_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="7cb5cb3c-6fe8-41f7-9e96-47fd2662a02b", timeout=2)
+    second_response = session.wait_for_message(types={"heartbeat_ack"}, request_id="857adaea-d0ce-488a-9bac-6c46c8219405", timeout=2)
 
     assert first_response["payload"]["sequence"] == 11
     assert second_response["payload"]["sequence"] == 12
@@ -3678,12 +3678,12 @@ def test_master_registry_expired_expectation_counts_once_per_period():
         "port": 9101,
     })
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "62dcc526-107a-4d5c-808f-ac8f1807b9b5", 1)
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e", 2)
 
     worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
     assert worker["heartbeat_misses"] == 1
-    assert worker["expected_heartbeat_request_id"] == "req-2"
+    assert worker["expected_heartbeat_request_id"] == "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e"
     assert worker["expected_heartbeat_sequence"] == 2
 
 
@@ -3698,8 +3698,8 @@ def test_master_registry_heartbeat_ack_valid_resets_failure_counter():
         "port": 9101,
     })
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-1", 1, "alive") is True
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "62dcc526-107a-4d5c-808f-ac8f1807b9b5", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "62dcc526-107a-4d5c-808f-ac8f1807b9b5", 1, "alive") is True
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 0
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "available"
 
@@ -3719,18 +3719,18 @@ def test_master_registry_liveness_transitions_from_available_to_suspect_to_unava
     assert worker["status"] == "available"
     assert worker["heartbeat_misses"] == 0
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other", 1, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "62dcc526-107a-4d5c-808f-ac8f1807b9b5", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "08c39a7f-79c5-42b8-8f27-486251acfe39", 1, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 1
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other-2", 2, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e", 2)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "220746c5-e8c9-48ab-877f-b3a827fe5733", 2, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-3", 3)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other-3", 3, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "76a11e89-1bf3-4929-b81c-dcf864117527", 3)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "d3dba2a7-d433-495a-a126-dd96af56e5d0", 3, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "unavailable"
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 3
 
@@ -3748,8 +3748,8 @@ def test_master_registry_valid_heartbeat_restores_available_and_clears_misses():
         "heartbeat_misses": 2,
     })
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected", 7)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-expected", 7, "alive") is True
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "d1880b1e-cb4f-4b58-9b2b-5d4fb8b2890d", 7)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "d1880b1e-cb4f-4b58-9b2b-5d4fb8b2890d", 7, "alive") is True
     worker = registry.get_worker("11111111-1111-4111-8111-111111111111")
     assert worker["status"] == "available"
     assert worker["heartbeat_misses"] == 0
@@ -3802,7 +3802,7 @@ def test_master_registry_worker_a_failure_does_not_change_worker_b_status():
         "port": 9102,
     })
 
-    for sequence, request_id in ((1, "req-a-1"), (2, "req-a-2"), (3, "req-a-3")):
+    for sequence, request_id in ((1, "0dadaacb-f5a7-440f-8bbd-007ed209e402"), (2, "da330919-6e7a-47f1-8613-8f6029170864"), (3, "168dd0f2-01b2-401f-8076-bd95a787d565")):
         registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
         registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive")
 
@@ -3821,12 +3821,12 @@ def test_master_registry_one_or_two_lost_heartbeats_mark_worker_as_suspect():
         "port": 9101,
     })
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-1", 1)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 1, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "62dcc526-107a-4d5c-808f-ac8f1807b9b5", 1)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e", 1, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-2", 2)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-2", 3, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e", 2)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e", 3, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["status"] == "suspect"
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
 
@@ -3842,7 +3842,7 @@ def test_master_registry_three_consecutive_lost_heartbeats_marks_worker_unavaila
         "port": 9101,
     })
 
-    for sequence, request_id in ((1, "req-1"), (2, "req-2"), (3, "req-3")):
+    for sequence, request_id in ((1, "62dcc526-107a-4d5c-808f-ac8f1807b9b5"), (2, "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e"), (3, "76a11e89-1bf3-4929-b81c-dcf864117527")):
         registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
         assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive") is False
 
@@ -3862,12 +3862,12 @@ def test_master_registry_rejects_heartbeat_ack_with_wrong_request_id_or_sequence
         "port": 9101,
     })
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected", 7)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-other", 7, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "d1880b1e-cb4f-4b58-9b2b-5d4fb8b2890d", 7)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "08c39a7f-79c5-42b8-8f27-486251acfe39", 7, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 1
 
-    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "req-expected-2", 8)
-    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "req-expected-2", 9, "alive") is False
+    registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", "47f3d1a6-c09d-42ae-9ac2-83c870fb4da1", 8)
+    assert registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", "47f3d1a6-c09d-42ae-9ac2-83c870fb4da1", 9, "alive") is False
     assert registry.get_worker("11111111-1111-4111-8111-111111111111")["heartbeat_misses"] == 2
 
 
@@ -3890,7 +3890,7 @@ def test_master_stays_operational_after_worker_is_marked_unavailable():
         "port": 9102,
     })
 
-    for sequence, request_id in ((1, "req-1"), (2, "req-2"), (3, "req-3")):
+    for sequence, request_id in ((1, "62dcc526-107a-4d5c-808f-ac8f1807b9b5"), (2, "1ba185b1-5f0d-45e6-9dd1-3c3611054f9e"), (3, "76a11e89-1bf3-4929-b81c-dcf864117527")):
         registry.begin_heartbeat_expectation("11111111-1111-4111-8111-111111111111", request_id, sequence)
         registry.process_heartbeat_ack("11111111-1111-4111-8111-111111111111", f"wrong-{request_id}", sequence, "alive")
 
@@ -3974,8 +3974,8 @@ def test_send_with_retry_success_on_first_attempt():
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-try-1",
-        "request_id": "req-try-1",
+        "message_id": "2c2436aa-8089-4908-8e6f-b92f8176c976",
+        "request_id": "4ee3932c-9f7d-43c4-a1ba-e643679a271f",
         "timestamp_ms": 1727170000123,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
@@ -3996,8 +3996,8 @@ def test_send_with_retry_retries_once_then_succeeds():
     message = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "msg-heart-1",
-        "request_id": "req-heart-1",
+        "message_id": "3747b145-2df0-48d9-b5c9-d1745fda09bd",
+        "request_id": "7012d7fe-c6b0-4304-8f24-4d400cc4c0a9",
         "timestamp_ms": 1727170000124,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
@@ -4019,8 +4019,8 @@ def test_send_with_retry_fails_after_three_total_attempts():
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-try-3",
-        "request_id": "req-try-3",
+        "message_id": "f6007fdb-eb7a-4ad2-b4af-12286ccff936",
+        "request_id": "f807e703-18f8-4293-bc8b-6a5e9914d224",
         "timestamp_ms": 1727170000125,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
@@ -4042,8 +4042,8 @@ def test_send_with_retry_preserves_same_message_logical_content_across_attempts(
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-preserve-1",
-        "request_id": "req-preserve-1",
+        "message_id": "cc0c6de4-bf47-43f6-bcf0-48689f6a3827",
+        "request_id": "01dff6c5-d07c-4cd6-96ac-8ffc9c41b348",
         "timestamp_ms": 1727170000126,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
@@ -4071,8 +4071,8 @@ def test_send_with_retry_uses_five_second_timeout():
     message = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "msg-heart-timeout",
-        "request_id": "req-heart-timeout",
+        "message_id": "4eedb791-4d93-4272-a74b-e4f8d5468d92",
+        "request_id": "692d12be-0d8a-4fe1-8cde-7d01ad291fec",
         "timestamp_ms": 1727170000127,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
@@ -4097,7 +4097,7 @@ def test_send_heartbeat_uses_send_with_retry(monkeypatch):
         "port": 9106,
     }
     call_log = {}
-    ack = {"type": "heartbeat_ack", "request_id": "req-heart-send-with-retry", "payload": {"sequence": 7, "status": "alive"}}
+    ack = {"type": "heartbeat_ack", "request_id": "26bf0b56-5b64-47fb-b6c4-49659a04e6cb", "payload": {"sequence": 7, "status": "alive"}}
 
     def fake_send_with_retry(session, message, *, expect_type, timeout, max_attempts):
         call_log["message"] = message
@@ -4125,18 +4125,18 @@ def test_master_registry_deduplicates_by_source_request_id_and_type():
     message = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "msg-dup-1",
-        "request_id": "req-dup-1",
+        "message_id": "2b074ab8-bc3e-45d6-b5dc-257b1aa68972",
+        "request_id": "cd8f77d6-be93-4f81-b38b-df915e3fe5a7",
         "timestamp_ms": 1727170000123,
         "source": {"group_label": "p2p-cluster", "node_id": "11111111-1111-4111-8111-111111111111", "node_label": "worker-a", "node_role": "worker"},
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
         "payload": {"sequence": 1},
     }
-    response = {"type": "heartbeat_ack", "request_id": "req-dup-1", "payload": {"status": "alive"}}
+    response = {"type": "heartbeat_ack", "request_id": "cd8f77d6-be93-4f81-b38b-df915e3fe5a7", "payload": {"status": "alive"}}
 
     registry.remember_processed_message(message, response)
     assert registry.get_processed_response(message) is response
-    assert registry.get_processed_response({**message, "request_id": "req-dup-2"}) is None
+    assert registry.get_processed_response({**message, "request_id": "50785bef-b1eb-41a2-8a7a-98f4452fa5ec"}) is None
     assert registry.get_processed_response({**message, "source": {**message["source"], "node_id": "22222222-2222-4222-8222-222222222222"}}) is None
     assert registry.get_processed_response({**message, "type": "register_worker"}) is None
 
@@ -4148,8 +4148,8 @@ def test_handle_client_deduplicates_retransmitted_register_worker_and_reuses_cac
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
-        "message_id": "msg-dup-register-real-1",
-        "request_id": "req-dup-register-real-1",
+        "message_id": "d967e0e5-b0fc-4de5-a02a-15b778458501",
+        "request_id": "5e8a09b5-5f98-451f-b750-3e98428ef2fe",
         "timestamp_ms": 1727170000124,
         "source": source,
         "destination": {"group_label": "p2p-cluster", "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": master_identity["node_role"]},
@@ -4184,8 +4184,8 @@ def test_handle_client_deduplicates_retransmitted_heartbeat_and_reuses_cached_ac
     message = {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
-        "message_id": "msg-dup-heart-real-1",
-        "request_id": "req-dup-heart-real-1",
+        "message_id": "9671f0a3-dcec-468a-a180-b42255fabaf9",
+        "request_id": "63568542-dca6-44bb-b865-c235b9dfd376",
         "timestamp_ms": 1727170000125,
         "source": source,
         "destination": {"group_label": "p2p-cluster", "node_id": master_identity["node_id"], "node_label": master_identity["node_label"], "node_role": master_identity["node_role"]},
@@ -4363,7 +4363,7 @@ def test_worker_session_stays_open_for_fragmented_ndjson_and_real_eof_only():
             "node_role": "master",
         },
         sequence=77,
-        request_id="req-hb-fragment-77",
+        request_id="ef6f3123-11a6-4c03-8437-28da0f60937c",
     )
 
     fragment = (json.dumps(heartbeat, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")[:20]
@@ -4375,7 +4375,7 @@ def test_worker_session_stays_open_for_fragmented_ndjson_and_real_eof_only():
     ack = build_heartbeat_ack_message(heartbeat, source=heartbeat["destination"], destination=heartbeat["source"])
     server_sock.sendall((json.dumps(ack, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
 
-    response = session.wait_for_message(types={"heartbeat_ack"}, request_id="req-hb-fragment-77", timeout=2)
+    response = session.wait_for_message(types={"heartbeat_ack"}, request_id="ef6f3123-11a6-4c03-8437-28da0f60937c", timeout=2)
     assert response["payload"]["status"] == "alive"
     assert not session.is_closed()
 
@@ -4577,7 +4577,7 @@ def test_received_log_uses_real_request_id(monkeypatch):
             "node_role": "master",
         },
         sequence=12,
-        request_id="req-real-12",
+        request_id="9eaf03ff-5f24-40a9-87a5-28ae134cd9de",
     )
     ack = build_heartbeat_ack_message(heartbeat, source=heartbeat["destination"], destination=heartbeat["source"])
     server_sock, client_sock = socket.socketpair()
@@ -4586,8 +4586,8 @@ def test_received_log_uses_real_request_id(monkeypatch):
 
     try:
         send_msg(server_sock, ack)
-        assert session.wait_for_message(types={"heartbeat_ack"}, request_id="req-real-12", timeout=1)["request_id"] == "req-real-12"
-        assert received["args"][4] == "req-real-12"
+        assert session.wait_for_message(types={"heartbeat_ack"}, request_id="9eaf03ff-5f24-40a9-87a5-28ae134cd9de", timeout=1)["request_id"] == "9eaf03ff-5f24-40a9-87a5-28ae134cd9de"
+        assert received["args"][4] == "9eaf03ff-5f24-40a9-87a5-28ae134cd9de"
     finally:
         session.close()
         server_sock.close()

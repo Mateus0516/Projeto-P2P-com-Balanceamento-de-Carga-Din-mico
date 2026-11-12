@@ -111,7 +111,7 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
     return {
         "version": "sd_2026_2_v1",
         "type": "registration_ack",
-        "message_id": "ack-" + str(uuid.uuid4()),
+        "message_id": str(uuid.uuid4()),
         "request_id": request_message["request_id"],
         "timestamp_ms": int(time.time() * 1000),
         "source": {
@@ -177,7 +177,7 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
             if stop_event.wait(interval_seconds):
                 break
             sequence += 1
-            request_id = f"req-master-heart-{sequence}"
+            request_id = str(uuid.uuid4())
             try:
                 with registry._lock:
                     worker = registry.get_worker(worker_identity["node_id"])
@@ -1237,3 +1237,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+#TODO:
+# MASTER ENVIA METRICAS AO COLETOR EXTERNO NA MESMA REDE (MAQUINAS DISTINTAS (PORTA 9100))
+# DEDUPLICAÇÃO TA OK.

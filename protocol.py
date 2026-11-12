@@ -1,4 +1,4 @@
-import json
+﻿import json
 import socket
 import threading
 import time
@@ -366,6 +366,14 @@ def validate_message(message: Any) -> bool:
         if not isinstance(message[field], str) or not message[field].strip():
             return False
 
+    for field in ("message_id", "request_id"):
+        try:
+            identifier = uuid.UUID(message[field])
+            if identifier.version != 4:
+                return False
+        except (ValueError, TypeError, AttributeError):
+            return False
+
     if not isinstance(message["timestamp_ms"], int) or isinstance(message["timestamp_ms"], bool):
         return False
     if message["timestamp_ms"] <= 0:
@@ -446,8 +454,8 @@ def build_task_submit_message(source: dict, destination: dict, task: dict, reque
     return {
         "version": "sd_2026_2_v1",
         "type": "task_submit",
-        "message_id": f"task-submit-{uuid.uuid4()}",
-        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -470,8 +478,8 @@ def build_task_submit_ack_message(request_message: dict, source: dict, destinati
     return {
         "version": "sd_2026_2_v1",
         "type": "task_submit_ack",
-        "message_id": f"task-submit-ack-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -493,8 +501,8 @@ def build_task_request_message(source: dict, destination: dict, *, assignment_ep
     return {
         "version": "sd_2026_2_v1",
         "type": "task_request",
-        "message_id": f"task-request-{uuid.uuid4()}",
-        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -515,8 +523,8 @@ def build_task_assignment_message(request_message: dict, source: dict, destinati
     return {
         "version": "sd_2026_2_v1",
         "type": "task_assignment",
-        "message_id": f"task-assignment-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -539,8 +547,8 @@ def build_no_task_message(request_message: dict, source: dict, destination: dict
     return {
         "version": "sd_2026_2_v1",
         "type": "no_task",
-        "message_id": f"no-task-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -552,8 +560,8 @@ def build_metrics_request_message(source: dict, destination: dict, *, request_id
     return {
         "version": "sd_2026_2_v1",
         "type": "metrics_request",
-        "message_id": f"metrics-request-{uuid.uuid4()}",
-        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -568,8 +576,8 @@ def build_metrics_response_message(request_message: dict, source: dict, destinat
     return {
         "version": "sd_2026_2_v1",
         "type": "metrics_response",
-        "message_id": f"metrics-response-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -603,8 +611,8 @@ def build_task_result_message(request_message: dict, source: dict, destination: 
     return {
         "version": "sd_2026_2_v1",
         "type": "task_result",
-        "message_id": f"task-result-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -634,8 +642,8 @@ def build_task_ack_message(request_message: dict, source: dict, destination: dic
     return {
         "version": "sd_2026_2_v1",
         "type": "task_ack",
-        "message_id": f"task-ack-{uuid.uuid4()}",
-        "request_id": str(request_message.get("request_id", "req-unknown")),
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(request_message["request_id"]),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -654,12 +662,12 @@ def build_heartbeat_message(source: dict, destination: dict, sequence: int, requ
     if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
         raise ValueError("heartbeat assignment_epoch must be a non-negative integer")
 
-    message_id = f"heartbeat-{uuid.uuid4()}"
+    message_id = str(uuid.uuid4())
     return {
         "version": "sd_2026_2_v1",
         "type": "heartbeat",
         "message_id": message_id,
-        "request_id": request_id or f"req-{uuid.uuid4()}",
+        "request_id": request_id or str(uuid.uuid4()),
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
         "destination": dict(destination),
@@ -673,7 +681,7 @@ def build_heartbeat_ack_message(request_message: dict, source: dict, destination
     return {
         "version": "sd_2026_2_v1",
         "type": "heartbeat_ack",
-        "message_id": f"heartbeat-ack-{uuid.uuid4()}",
+        "message_id": str(uuid.uuid4()),
         "request_id": request_message["request_id"],
         "timestamp_ms": int(time.time() * 1000),
         "source": dict(source),
@@ -704,7 +712,7 @@ def build_protocol_error_message(message: dict, master_identity: dict, reason: s
     return {
         "version": "sd_2026_2_v1",
         "type": "protocol_error",
-        "message_id": f"protocol-error-{uuid.uuid4()}",
+        "message_id": str(uuid.uuid4()),
         "request_id": request_id,
         "timestamp_ms": int(time.time() * 1000),
         "source": {
@@ -984,3 +992,4 @@ class MasterRegistry:
             if worker and worker.get("node_label") in self.node_labels:
                 if self.node_labels.get(worker["node_label"]) == uuid_value:
                     del self.node_labels[worker["node_label"]]
+

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import socket
 import sys
 import time
@@ -47,6 +48,36 @@ class TaskClient:
             "node_role": self.node_role,
         }
 
+    def _master_identity(self) -> dict[str, str]:
+        """Use the local master configuration when available.
+
+        The original fallback is retained for standalone client deployments
+        without a local master/config.json file.
+        """
+        identity = {
+            "group_label": self.group_label,
+            "node_id": "22222222-2222-4222-8222-222222222222",
+            "node_label": "master",
+            "node_role": "master",
+        }
+        config_path = ROOT / "master" / "config.json"
+        if config_path.is_file():
+            try:
+                with config_path.open("r", encoding="utf-8") as file:
+                    config = json.load(file)
+                node_id = str(config.get("node_id", ""))
+                parsed = uuid.UUID(node_id)
+                if parsed.version == 4 and config.get("node_role") == "master":
+                    identity = {
+                        "group_label": str(config.get("group_label", self.group_label)),
+                        "node_id": node_id,
+                        "node_label": str(config.get("node_label", "master")),
+                        "node_role": "master",
+                    }
+            except (OSError, ValueError, TypeError, AttributeError):
+                pass
+        return identity
+
     def build_task_message(self, task_id: str, *, start: int, end: int, request_id: str | None = None) -> dict[str, Any]:
         task = {
             "task_id": str(task_id),
@@ -56,17 +87,11 @@ class TaskClient:
         if not validate_task_submit_payload(task):
             raise ValueError(f"invalid sum_range task for task_id={task_id!r}")
 
-        destination = {
-            "group_label": self.group_label,
-            "node_id": "22222222-2222-4222-8222-222222222222",
-            "node_label": "master",
-            "node_role": "master",
-        }
         return build_task_submit_message(
             source=self.source_identity,
-            destination=destination,
+            destination=self._master_identity(),
             task=task,
-            request_id=request_id or f"req-{uuid.uuid4()}",
+            request_id=request_id or str(uuid.uuid4()),
         )
 
     def submit_task(self, task_id: str, *, start: int, end: int, timeout: float | None = None, request_id: str | None = None) -> dict[str, Any]:
