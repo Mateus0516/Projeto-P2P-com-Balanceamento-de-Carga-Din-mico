@@ -1,0 +1,12 @@
+Teste: Intervalo configuravel da telemetria
+
+Configuracao utilizada: 2.0 segundos
+Relatorios analisados: 10
+Intervalo medio observado: aproximadamente 2.02 segundos
+
+Resultado:
+- Master respeitou o intervalo configurado.
+- Collector recebeu os relatorios continuamente.
+- Comunicacao TCP sem falhas observadas.
+
+Status: APROVADO

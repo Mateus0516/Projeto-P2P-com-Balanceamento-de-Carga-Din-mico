@@ -232,6 +232,48 @@ def validate_metrics_request_payload(payload: Any) -> bool:
     return isinstance(payload, dict)
 
 
+def validate_performance_report_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_counters = (
+        "uptime_seconds",
+        "tasks_pending",
+        "tasks_running",
+        "tasks_completed",
+        "tasks_failed",
+        "workers_owned",
+        "workers_active_here",
+        "workers_busy",
+        "workers_idle",
+        "workers_reserved",
+        "workers_lent",
+        "workers_received",
+        "workers_unavailable",
+    )
+
+    for field in required_counters:
+        value = payload.get(field)
+        if type(value) not in (int, float) or value < 0:
+            return False
+
+    if payload["workers_active_here"] != (
+        payload["workers_busy"] + payload["workers_idle"]
+    ):
+        return False
+
+    if not isinstance(payload.get("thresholds"), dict):
+        return False
+
+    if not isinstance(payload.get("loans"), list):
+        return False
+
+    if not isinstance(payload.get("neighbors"), list):
+        return False
+
+    return True
+
+
 def validate_metrics_response_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -364,7 +406,7 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
-    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response"}:
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report"}:
         return False
 
     for field in ("type", "message_id", "request_id"):
@@ -475,6 +517,10 @@ def validate_message(message: Any) -> bool:
 
     if message["type"] == "metrics_request":
         if not validate_metrics_request_payload(payload):
+            return False
+
+    if message["type"] == "performance_report":
+        if not validate_performance_report_payload(payload):
             return False
 
     if message["type"] == "metrics_response":
@@ -593,6 +639,33 @@ def build_no_task_message(request_message: dict, source: dict, destination: dict
         "destination": dict(destination),
         "payload": {"retry_after_ms": int(retry_after_ms)},
     }
+
+
+def build_performance_report_message(
+    source: dict,
+    destination: dict,
+    *,
+    metrics: dict,
+    request_id: str | None = None,
+) -> dict:
+    if not validate_performance_report_payload(metrics):
+        raise ValueError("performance_report payload inv?lido")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "performance_report",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": dict(metrics),
+    }
+
+    if not validate_message(message):
+        raise ValueError("performance_report message inv?lida")
+
+    return message
 
 
 def build_metrics_request_message(source: dict, destination: dict, *, request_id: str | None = None) -> dict:
@@ -798,7 +871,7 @@ def classify_protocol_error(message: dict) -> str:
         return "invalid field capitalization: use 'version' instead of 'Version'"
 
     if "type" in message and isinstance(message["type"], str):
-        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response"}:
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report"}:
             return f"unknown message type: {message['type']}"
 
     if "version" in message and isinstance(message["version"], str):

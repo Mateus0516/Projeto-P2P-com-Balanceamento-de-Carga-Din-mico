@@ -121,6 +121,68 @@ def collect_once(host: str, port: int, output_dir: str | Path, *, timeout: float
     return json_path, csv_path
 
 
+def receive_performance_reports(
+    host: str = "0.0.0.0",
+    port: int = 9100,
+    output_dir: str | Path = "./reports",
+    *,
+    collector_identity: Dict[str, str] | None = None,
+) -> None:
+    identity = default_collector_identity() if collector_identity is None else collector_identity
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    jsonl_path = output_path / "performance_reports.jsonl"
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((host, int(port)))
+        server.listen(5)
+        print(f"Collector TCP listening on {host}:{port}")
+
+        while True:
+            conn, addr = server.accept()
+            with conn:
+                buffer = bytearray()
+
+                while True:
+                    try:
+                        packets = recv_msgs(conn, buffer)
+                    except (OSError, ValueError) as exc:
+                        print(f"Collector connection error: {exc}")
+                        break
+
+                    if packets is None:
+                        break
+
+                    for message in packets:
+                        if not validate_message(message):
+                            continue
+
+                        if message.get("type") != "performance_report":
+                            continue
+
+                        source = message.get("source", {})
+                        destination = message.get("destination", {})
+
+                        if source.get("node_role") != "master":
+                            continue
+
+                        if destination.get("node_id") != identity["node_id"]:
+                            continue
+
+                        payload = message["payload"]
+
+                        with jsonl_path.open("a", encoding="utf-8") as handle:
+                            handle.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+                        print(
+                            f"performance_report from {source.get('node_label')} "
+                            f"tasks_completed={payload['tasks_completed']} "
+                            f"tasks_running={payload['tasks_running']} "
+                            f"workers_active={payload['workers_active_here']}"
+                        )
+
+
 def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect master metrics and export JSON/CSV reports.")
     parser.add_argument("--host", default="127.0.0.1", help="Master host to connect to")
@@ -131,12 +193,27 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=5.0, help="Timeout for the metrics request")
     parser.add_argument("--interval-seconds", type=float, default=10.0, help="Seconds between scheduled metric collections; use --once to run only one collection")
     parser.add_argument("--once", action="store_true", help="Collect metrics once and exit immediately")
+    parser.add_argument("--listen", action="store_true", help="Receive performance_report messages over TCP")
+    parser.add_argument("--listen-host", default="0.0.0.0", help="TCP listening address")
+    parser.add_argument("--listen-port", type=int, default=9100, help="TCP listening port")
     args = parser.parse_args(argv)
 
     if args.interval_seconds <= 0:
         parser.error("--interval-seconds must be greater than zero")
 
+    if args.listen and args.once:
+        parser.error("--listen and --once cannot be used together")
+
     try:
+        if args.listen:
+            receive_performance_reports(
+                host=args.listen_host,
+                port=args.listen_port,
+                output_dir=args.output_dir,
+                collector_identity=default_collector_identity(args.collector_label),
+            )
+            return 0
+
         if args.once:
             collect_once(
                 args.host,

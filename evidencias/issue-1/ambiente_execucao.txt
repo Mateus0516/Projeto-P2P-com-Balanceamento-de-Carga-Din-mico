@@ -1,0 +1,3 @@
+Python: Python 3.14.5
+Branch: sprint-3
+Commit: 431c29898963147c4f8998912bcc5839c256c96d

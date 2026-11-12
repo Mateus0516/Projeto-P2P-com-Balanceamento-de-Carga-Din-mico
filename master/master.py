@@ -19,6 +19,7 @@ from protocol import (
     build_heartbeat_ack_message,
     build_heartbeat_message,
     build_metrics_response_message,
+    build_performance_report_message,
     build_no_task_message,
     build_protocol_error_message,
     build_task_ack_message as protocol_build_task_ack_message,
@@ -339,6 +340,32 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                 msg_type = message["type"]
                 request_id = message["request_id"]
                 source = message["source"]
+
+                if msg_type in {"heartbeat", "heartbeat_ack", "task_request", "task_result"}:
+                    worker_id = source["node_id"]
+                    with registry._lock:
+                        active_session = registry.active_sessions.get(worker_id)
+                        session_allowed = (
+                            source.get("node_role") == "worker"
+                            and (
+                                registry.is_active_session(worker_id, conn)
+                                or (
+                                    active_session is None
+                                    and msg_type in {"heartbeat", "task_request"}
+                                )
+                            )
+                        )
+                    if not session_allowed:
+                        log_event(
+                            "ASD",
+                            source["node_label"],
+                            "master",
+                            msg_type,
+                            request_id,
+                            "inactive_worker_session",
+                        )
+                        return
+
                 if registry.has_request_conflict(message):
                     error_response = build_protocol_error_message(
                         message,
@@ -585,33 +612,48 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     if result_status not in {"ok", "nok"}:
                         result_status = "ok" if str(payload.get("result")) != "None" else "nok"
 
-                    if result_status == "ok":
-                        accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=True, reason="completed", payload=payload)
-                    else:
-                        accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=False, reason="attempt_failed", payload=payload)
+                    with registry._lock:
+                        if not registry.is_active_session(str(source["node_id"]), conn):
+                            log_event("ASD", source["node_label"], "master", msg_type, request_id, "inactive_worker_session")
+                            return
 
-                    ack = build_task_ack_message(
-                        message,
-                        source={
-                            "group_label": str(master_identity["group_label"]),
-                            "node_id": str(master_identity["node_id"]),
-                            "node_label": str(master_identity["node_label"]),
-                            "node_role": str(master_identity["node_role"]),
-                        },
-                        destination={
-                            "group_label": str(source["group_label"]),
-                            "node_id": str(source["node_id"]),
-                            "node_label": str(source["node_label"]),
-                            "node_role": str(source["node_role"]),
-                        },
-                        task_id=task_id,
-                        attempt_id=attempt_id,
-                        accepted=bool(accepted),
-                        reason=str(reason),
-                    )
-                    registry.remember_processed_message(message, ack)
+                        if registry.has_request_conflict(message):
+                            response_to_send = build_protocol_error_message(message, master_identity, "request_conflict")
+                            response_to_send["payload"]["error_code"] = "request_conflict"
+                            response_to_send["payload"]["error_message"] = "request_id reused with different content"
+                        else:
+                            response_to_send = registry.get_processed_response(message)
+
+                        if response_to_send is None:
+                            if result_status == "ok":
+                                accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=True, reason="completed", payload=payload, worker_id=str(source["node_id"]))
+                            else:
+                                accepted, reason = task_queue.complete_task(task_id, attempt_id, accepted=False, reason="attempt_failed", payload=payload, worker_id=str(source["node_id"]))
+
+                            ack = build_task_ack_message(
+                                message,
+                                source={
+                                    "group_label": str(master_identity["group_label"]),
+                                    "node_id": str(master_identity["node_id"]),
+                                    "node_label": str(master_identity["node_label"]),
+                                    "node_role": str(master_identity["node_role"]),
+                                },
+                                destination={
+                                    "group_label": str(source["group_label"]),
+                                    "node_id": str(source["node_id"]),
+                                    "node_label": str(source["node_label"]),
+                                    "node_role": str(source["node_role"]),
+                                },
+                                task_id=task_id,
+                                attempt_id=attempt_id,
+                                accepted=bool(accepted),
+                                reason=str(reason),
+                            )
+                            registry.remember_processed_message(message, ack)
+                            response_to_send = ack
+
                     with write_lock:
-                        send_msg(conn, ack)
+                        send_msg(conn, response_to_send)
                     log_event("ASD", "master", source["node_label"], "task_ack", request_id, "sent")
 
                 elif msg_type == "task_request":
@@ -1200,7 +1242,7 @@ class MasterTaskQueue:
                 record["attempts"][record["last_attempt_id"]]["status"] = "pending"
             return True
 
-    def complete_task(self, task_id: str, attempt_id: str, *, accepted: bool, reason: str, payload: Dict[str, object] | None = None) -> tuple[bool, str]:
+    def complete_task(self, task_id: str, attempt_id: str, *, accepted: bool, reason: str, payload: Dict[str, object] | None = None, worker_id: str | None = None) -> tuple[bool, str]:
         if not isinstance(task_id, str) or not task_id.strip():
             return False, "invalid task_id"
         if not isinstance(attempt_id, str) or not attempt_id.strip():
@@ -1217,6 +1259,23 @@ class MasterTaskQueue:
                 return False, "stale_attempt"
 
             attempt_record = attempts.get(attempt_id, {})
+
+            if worker_id is not None:
+                if str(attempt_record.get("worker_id")) != worker_id:
+                    return False, "wrong_worker"
+
+                result_payload = payload if isinstance(payload, dict) else {}
+
+                epoch = result_payload.get("assignment_epoch")
+                if type(epoch) is not int:
+                    return False, "invalid_assignment_epoch"
+
+                if epoch != attempt_record.get("assignment_epoch"):
+                    return False, "stale_assignment_epoch"
+
+                if result_payload.get("loan_id") != attempt_record.get("loan_id"):
+                    return False, "invalid_loan_id"
+
             if bool(attempt_record.get("result_seen")):
                 return True, "duplicate result"
 
@@ -1288,14 +1347,175 @@ class MasterTaskQueue:
             return len(self._tasks)
 
 
+
+def build_master_performance_metrics(
+    registry: MasterRegistry,
+    task_queue: MasterTaskQueue,
+    master_identity: Dict[str, object],
+    *,
+    uptime_seconds: float = 0.0,
+) -> dict:
+    snapshot = task_queue.snapshot()
+
+    with registry._lock:
+        workers = {node_id: dict(worker) for node_id, worker in registry.workers.items()}
+        active_ids = set(registry.active_sessions)
+
+    with task_queue._lock:
+        busy_ids = {
+            str(task.get("assigned_to"))
+            for task in task_queue._tasks.values()
+            if task.get("status") == "running" and task.get("assigned_to")
+        }
+
+    available_ids = {
+        node_id
+        for node_id, worker in workers.items()
+        if node_id in active_ids and worker.get("status") == "available"
+    }
+
+    busy = len(available_ids & busy_ids)
+    idle = len(available_ids - busy_ids)
+
+    return {
+        "uptime_seconds": max(0.0, float(uptime_seconds)),
+        "tasks_pending": int(snapshot["pending"]),
+        "tasks_running": int(snapshot["running"]),
+        "tasks_completed": int(snapshot["completed"]),
+        "tasks_failed": int(snapshot["failed"]),
+        "workers_owned": len(workers),
+        "workers_active_here": busy + idle,
+        "workers_busy": busy,
+        "workers_idle": idle,
+        "workers_reserved": 0,
+        "workers_lent": 0,
+        "workers_received": 0,
+        "workers_unavailable": sum(
+            worker.get("status") == "unavailable"
+            for worker in workers.values()
+        ),
+        "thresholds": {
+            "saturation_threshold": int(master_identity.get("saturation_threshold", 10)),
+            "release_threshold": int(master_identity.get("release_threshold", 3)),
+            "stable_samples": int(master_identity.get("stable_samples", 3)),
+            "monitor_interval_ms": int(master_identity.get("monitor_interval_ms", 1000)),
+        },
+        "loans": [],
+        "neighbors": [],
+    }
+
+
+
+def send_master_performance_report(
+    registry: MasterRegistry,
+    task_queue: MasterTaskQueue,
+    master_identity: Dict[str, object],
+    *,
+    collector_host: str = "127.0.0.1",
+    collector_port: int = 9100,
+    uptime_seconds: float = 0.0,
+    timeout_seconds: float = 2.0,
+) -> bool:
+    collector_identity = {
+        "group_label": str(master_identity.get("group_label", "p2p-cluster")),
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "collector",
+        "node_role": "collector",
+    }
+
+    try:
+        metrics = build_master_performance_metrics(
+            registry,
+            task_queue,
+            master_identity,
+            uptime_seconds=uptime_seconds,
+        )
+
+        message = build_performance_report_message(
+            master_identity,
+            collector_identity,
+            metrics=metrics,
+        )
+
+        with socket.create_connection(
+            (collector_host, int(collector_port)),
+            timeout=timeout_seconds,
+        ) as conn:
+            conn.settimeout(timeout_seconds)
+            send_msg(conn, message)
+
+        return True
+
+    except (OSError, ValueError, TypeError) as exc:
+        log_event(
+            "ASD",
+            "master",
+            "collector",
+            "performance_report",
+            "-",
+            f"send_failed: {exc}",
+        )
+        return False
+
+
+
+def start_master_performance_report_loop(
+    registry: MasterRegistry,
+    task_queue: MasterTaskQueue,
+    master_identity: Dict[str, object],
+    *,
+    collector_host: str = "127.0.0.1",
+    collector_port: int = 9100,
+    interval_seconds: float = 10.0,
+    stop_event: threading.Event | None = None,
+) -> threading.Thread:
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds deve ser positivo")
+
+    if stop_event is None:
+        stop_event = threading.Event()
+
+    started_at = time.monotonic()
+
+    def loop() -> None:
+        while not stop_event.wait(interval_seconds):
+            send_master_performance_report(
+                registry,
+                task_queue,
+                master_identity,
+                collector_host=collector_host,
+                collector_port=collector_port,
+                uptime_seconds=time.monotonic() - started_at,
+            )
+
+    thread = threading.Thread(
+        target=loop,
+        name="master-performance-report",
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
+
+
 def run_server(host: str, port: int, master_identity: Dict[str, object], *, snapshot_interval_seconds: float = 0.0) -> None:
     registry = MasterRegistry()
     task_queue = MasterTaskQueue()
     reaper_stop = threading.Event()
     monitor_stop = threading.Event()
     snapshot_stop = threading.Event()
-    load_monitor = LoadMonitor(task_queue, saturation_threshold=10, release_threshold=3, stable_samples=3, monitor_interval_ms=1000)
-    load_monitor.start(stop_event=monitor_stop, interval_seconds=1.0)
+    performance_stop = threading.Event()
+    load_monitor = LoadMonitor(
+        task_queue,
+        saturation_threshold=int(master_identity.get("saturation_threshold", 10)),
+        release_threshold=int(master_identity.get("release_threshold", 3)),
+        stable_samples=int(master_identity.get("stable_samples", 3)),
+        monitor_interval_ms=int(master_identity.get("monitor_interval_ms", 1000)),
+    )
+    load_monitor.start(
+        stop_event=monitor_stop,
+        interval_seconds=load_monitor.monitor_interval_ms / 1000.0,
+    )
     start_task_reaper_loop(task_queue, interval_seconds=0.25, stop_event=reaper_stop)
     if snapshot_interval_seconds > 0:
         start_master_snapshot_loop(task_queue, interval_seconds=snapshot_interval_seconds, stop_event=snapshot_stop)
@@ -1304,6 +1524,18 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
     server.bind((host, port))
     server.listen(5)
     log_event("ASD", "master", "network", "server_start", "-", f"listening on {host}:{port}")
+
+    start_master_performance_report_loop(
+        registry,
+        task_queue,
+        master_identity,
+        collector_host=str(master_identity.get("collector_host", "127.0.0.1")),
+        collector_port=int(master_identity.get("collector_port", 9100)),
+        interval_seconds=float(
+            master_identity.get("performance_interval_seconds", 10.0)
+        ),
+        stop_event=performance_stop,
+    )
 
     try:
         while True:
@@ -1315,6 +1547,7 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
         reaper_stop.set()
         monitor_stop.set()
         snapshot_stop.set()
+        performance_stop.set()
         try:
             server.close()
         except OSError:

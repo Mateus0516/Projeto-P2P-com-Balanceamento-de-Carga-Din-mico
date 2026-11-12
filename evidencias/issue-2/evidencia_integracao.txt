@@ -1,0 +1,13 @@
+Componente: Master e Collector
+Protocolo: TCP
+Mensagem: performance_report
+Porta do Collector: 9100
+Persistência: performance_reports.jsonl
+
+Resultado:
+- Conexão TCP estabelecida.
+- Relatório recebido pelo Collector.
+- Arquivo JSONL gerado.
+- Cinco registros JSONL validados estruturalmente.
+
+Status: APROVADO

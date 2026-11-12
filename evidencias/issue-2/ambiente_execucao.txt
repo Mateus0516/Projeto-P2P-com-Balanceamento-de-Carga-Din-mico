@@ -1,0 +1,4 @@
+Python: Python 3.14.5
+Branch: sprint-3
+Commit: c82662830884a470ec12a14eea500b7568e7aada
+Data: 12/11/2026 15:50:41

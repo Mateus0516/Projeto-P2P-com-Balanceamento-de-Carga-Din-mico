@@ -165,7 +165,8 @@ class WorkerControlSession:
         self.sock = sock
         self.lock = threading.Lock()
         self.buffer = bytearray()
-        self._queue: "queue.Queue[dict]" = queue.Queue()
+        self._pending_messages: list[dict] = []
+        self._message_condition = threading.Condition()
         self._closed = threading.Event()
         self._close_callbacks = []
         self._reader = threading.Thread(target=self._reader_loop, daemon=True)
@@ -244,7 +245,9 @@ class WorkerControlSession:
                     log_event("ASD", message["destination"]["node_label"], message["source"]["node_label"], "heartbeat_ack", message["request_id"], "sent")
                     continue
 
-                self._queue.put(message)
+                with self._message_condition:
+                    self._pending_messages.append(message)
+                    self._message_condition.notify_all()
 
     def send_message(self, message: dict) -> None:
         if self._closed.is_set():
@@ -263,22 +266,25 @@ class WorkerControlSession:
 
     def wait_for_message(self, *, types: set[str] | None = None, request_id: str | None = None, timeout: float = 5.0, stop_event: threading.Event | None = None) -> dict:
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if stop_event is not None and stop_event.is_set():
-                raise TimeoutError(f"Session stopped while waiting for {request_id or types or 'any'}")
-            try:
-                remaining = max(0.05, deadline - time.monotonic())
-                message = self._queue.get(timeout=remaining)
-            except queue.Empty:
-                continue
 
-            if types is not None and message.get("type") not in types:
-                continue
-            if request_id is not None and message.get("request_id") != request_id:
-                continue
-            return message
+        with self._message_condition:
+            while True:
+                if stop_event is not None and stop_event.is_set():
+                    raise TimeoutError(f"Session stopped while waiting for {request_id or types or 'any'}")
 
-        raise TimeoutError(f"No matching message received for {request_id or types or 'any'}")
+                for index, message in enumerate(self._pending_messages):
+                    if types is not None and message.get("type") not in types:
+                        continue
+                    if request_id is not None and message.get("request_id") != request_id:
+                        continue
+
+                    return self._pending_messages.pop(index)
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(f"No matching message received for {request_id or types or 'any'}")
+
+                self._message_condition.wait(timeout=min(remaining, 0.1))
 
 
 
@@ -450,6 +456,8 @@ class WorkerSessionManager:
                 "message": dict(task_result),
                 "last_sent_at": time.monotonic(),
                 "send_count": 1,
+                "retry_session_id": id(self.current_session),
+                "session_send_count": 1,
             }
 
     def _drop_pending_result(self, task_id: str, attempt_id: str) -> None:
@@ -471,14 +479,37 @@ class WorkerSessionManager:
             message = item.get("message")
             if not isinstance(message, dict):
                 continue
-            session.send_message(message)
-            sent += 1
+
+            key = self._pending_result_key(
+                str(item.get("task_id", "")),
+                str(item.get("attempt_id", "")),
+            )
+
             with self._lock:
-                key = self._pending_result_key(str(item.get("task_id", "")), str(item.get("attempt_id", "")))
                 existing = self.pending_results.get(key)
-                if existing is not None:
-                    existing["last_sent_at"] = time.monotonic()
-                    existing["send_count"] = int(existing.get("send_count", 1)) + 1
+                if existing is None:
+                    continue
+
+                session_id = id(session)
+                new_session = existing.get("retry_session_id") != session_id
+
+                if new_session:
+                    existing["retry_session_id"] = session_id
+                    existing["session_send_count"] = 0
+
+                if int(existing.get("session_send_count", 0)) >= 3:
+                    continue
+
+                last_sent = float(existing.get("last_sent_at", 0.0))
+                if not new_session and time.monotonic() - last_sent < 5.0:
+                    continue
+
+                session.send_message(message)
+                existing["session_send_count"] += 1
+                existing["last_sent_at"] = time.monotonic()
+                existing["send_count"] = int(existing.get("send_count", 1)) + 1
+                sent += 1
+
         return sent
 
     def process_inbound_message(self, message: dict) -> dict | bool:

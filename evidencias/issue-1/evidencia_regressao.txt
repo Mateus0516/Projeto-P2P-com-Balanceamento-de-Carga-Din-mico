@@ -1,0 +1,6 @@
+..................................ASD | worker-b | master | session | - | lost
+...........................ASD | worker-good | master | heartbeat | socket closed | unavailable
+........... [ 60%]
+..ASD | worker-good | master | heartbeat | socket closed | unavailable
+.............................................                          [100%]
+119 passed in 10.97s

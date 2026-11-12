@@ -1714,11 +1714,15 @@ def test_worker_resumes_polling_after_accepted_task_ack():
         }
 
         manager.start_task_polling_loop(session, interval_seconds=0.05)
-        session._queue.put(assignment)
+        with session._message_condition:
+            session._pending_messages.append(assignment)
+            session._message_condition.notify_all()
         time.sleep(0.25)
         assert manager.busy is True
 
-        session._queue.put(task_ack)
+        with session._message_condition:
+            session._pending_messages.append(task_ack)
+            session._message_condition.notify_all()
         time.sleep(0.30)
 
         assert manager.busy is False
@@ -1979,6 +1983,11 @@ def test_worker_retransmits_pending_result_without_recalculating():
         raw = server_sock.recv(4096)
         first = json.loads(raw.decode("utf-8").strip())
         assert first["payload"]["task_id"] == "task-040"
+
+        assert manager.retransmit_pending_results(session) == 0
+
+        pending = next(iter(manager.pending_results.values()))
+        pending["last_sent_at"] -= 5.0
 
         resent = manager.retransmit_pending_results(session)
         assert resent == 1
@@ -5114,3 +5123,884 @@ def test_worker_close_is_safe_and_idempotent():
     assert session.is_closed()
     assert session.sock is client_sock
     server_sock.close()
+
+
+def test_worker_preserves_interleaved_messages_for_other_waiters():
+    import socket
+    import threading
+    import time
+
+    from worker.worker import WorkerControlSession
+
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    try:
+        assignment = {
+            "type": "task_assignment",
+            "request_id": "assignment-request",
+        }
+        heartbeat_ack = {
+            "type": "heartbeat_ack",
+            "request_id": "heartbeat-request",
+        }
+
+        result = {}
+        errors = []
+
+        def wait_heartbeat():
+            try:
+                result["heartbeat"] = session.wait_for_message(
+                    types={"heartbeat_ack"},
+                    request_id="heartbeat-request",
+                    timeout=1.0,
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        waiter = threading.Thread(target=wait_heartbeat)
+        waiter.start()
+
+        with session._message_condition:
+            session._pending_messages.append(assignment)
+            session._message_condition.notify_all()
+
+        time.sleep(0.05)
+
+        with session._message_condition:
+            session._pending_messages.append(heartbeat_ack)
+            session._message_condition.notify_all()
+
+        waiter.join(timeout=2.0)
+
+        assert not waiter.is_alive()
+        assert not errors
+        assert result["heartbeat"] == heartbeat_ack
+
+        received_assignment = session.wait_for_message(
+            types={"task_assignment"},
+            timeout=0.5,
+        )
+        assert received_assignment == assignment
+    finally:
+        session.close()
+        server_sock.close()
+
+
+def test_worker_socket_preserves_task_assignment_during_heartbeat_ack():
+    import socket
+    import uuid
+
+    from protocol import (
+        build_heartbeat_message,
+        build_heartbeat_ack_message,
+        build_task_assignment_message,
+        send_msg,
+    )
+    from worker.worker import WorkerControlSession
+
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    session = WorkerControlSession(client_sock)
+
+    try:
+        assignment = build_task_assignment_message(
+            {"request_id": str(uuid.uuid4())},
+            master,
+            worker,
+            task_id="task-integration-001",
+            task_label="task-0001",
+            attempt_id=str(uuid.uuid4()),
+            task_kind="sum_range",
+            parameters={"start": 1, "end": 100},
+            assignment_epoch=1,
+            loan_id=None,
+        )
+
+        heartbeat = build_heartbeat_message(
+            source=worker,
+            destination=master,
+            sequence=1,
+            request_id=str(uuid.uuid4()),
+        )
+        heartbeat_ack = build_heartbeat_ack_message(
+            heartbeat,
+            source=master,
+            destination=worker,
+        )
+
+        send_msg(server_sock, assignment)
+        send_msg(server_sock, heartbeat_ack)
+
+        received_ack = session.wait_for_message(
+            types={"heartbeat_ack"},
+            request_id=heartbeat["request_id"],
+            timeout=2.0,
+        )
+
+        assert received_ack["payload"]["status"] == "alive"
+
+        received_assignment = session.wait_for_message(
+            types={"task_assignment"},
+            request_id=assignment["request_id"],
+            timeout=2.0,
+        )
+
+        assert received_assignment == assignment
+        assert received_assignment["payload"]["task_id"] == "task-integration-001"
+
+    finally:
+        session.close()
+        server_sock.close()
+
+
+def test_master_validates_task_result_worker_epoch_and_loan():
+    from master.master import MasterTaskQueue
+
+    queue = MasterTaskQueue()
+    queue.submit({
+        "task_id": "task-security-1",
+        "task_kind": "sum_range",
+        "parameters": {"start": 1, "end": 10},
+    })
+
+    assignment = queue.claim_next_task(
+        "worker-a",
+        assignment_epoch=7,
+        loan_id="loan-security-1",
+    )
+    assert assignment is not None
+
+    valid_payload = {
+        "status": "ok",
+        "result": {"sum": 55},
+        "assignment_epoch": 7,
+        "loan_id": "loan-security-1",
+    }
+
+    cases = [
+        ("worker-b", valid_payload, "wrong_worker"),
+        (
+            "worker-a",
+            {**valid_payload, "assignment_epoch": 6},
+            "stale_assignment_epoch",
+        ),
+        (
+            "worker-a",
+            {**valid_payload, "loan_id": "wrong-loan"},
+            "invalid_loan_id",
+        ),
+    ]
+
+    for worker_id, payload, expected_reason in cases:
+        accepted, reason = queue.complete_task(
+            "task-security-1",
+            assignment["attempt_id"],
+            accepted=True,
+            reason="completed",
+            payload=payload,
+            worker_id=worker_id,
+        )
+
+        assert accepted is False
+        assert reason == expected_reason
+
+        current = queue.get_task("task-security-1")
+        assert current["status"] == "running"
+        assert current["assigned_to"] == "worker-a"
+
+    accepted, reason = queue.complete_task(
+        "task-security-1",
+        assignment["attempt_id"],
+        accepted=True,
+        reason="completed",
+        payload=valid_payload,
+        worker_id="worker-a",
+    )
+
+    assert accepted is True
+    assert reason == "completed"
+    assert queue.get_task("task-security-1")["status"] == "completed"
+
+    duplicate_accepted, duplicate_reason = queue.complete_task(
+        "task-security-1",
+        assignment["attempt_id"],
+        accepted=True,
+        reason="completed",
+        payload=valid_payload,
+        worker_id="worker-a",
+    )
+
+    assert duplicate_accepted is True
+    assert duplicate_reason == "duplicate result"
+
+    invalid_duplicate, invalid_reason = queue.complete_task(
+        "task-security-1",
+        assignment["attempt_id"],
+        accepted=True,
+        reason="completed",
+        payload=valid_payload,
+        worker_id="worker-b",
+    )
+
+    assert invalid_duplicate is False
+    assert invalid_reason == "wrong_worker"
+
+
+def test_master_rejects_stale_worker_session_after_reconnect():
+    registry = MasterRegistry()
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+
+    queue = MasterTaskQueue()
+    queue.submit({
+        "task_id": "stale-session-task",
+        "task_kind": "sum_range",
+        "parameters": {"start": 1, "end": 10},
+    })
+    assignment = queue.claim_next_task(
+        worker["node_id"],
+        assignment_epoch=0,
+        loan_id=None,
+    )
+    assert assignment is not None
+
+    old_server, old_client = socket.socketpair()
+    new_server, new_client = socket.socketpair()
+
+    try:
+        registry.bind_session(worker["node_id"], old_server)
+        registry.bind_session(worker["node_id"], new_server)
+
+        assert not registry.is_active_session(worker["node_id"], old_server)
+        assert registry.is_active_session(worker["node_id"], new_server)
+
+        def result_message():
+            return {
+                "version": "sd_2026_2_v1",
+                "type": "task_result",
+                "message_id": str(uuid.uuid4()),
+                "request_id": str(uuid.uuid4()),
+                "timestamp_ms": int(time.time() * 1000),
+                "source": worker,
+                "destination": master,
+                "payload": {
+                    "task_id": "stale-session-task",
+                    "task_label": "stale-session-task",
+                    "attempt_id": assignment["attempt_id"],
+                    "status": "ok",
+                    "result": {"sum": 55},
+                    "error_code": None,
+                    "assignment_epoch": 0,
+                    "loan_id": None,
+                },
+            }
+
+        stale_thread = threading.Thread(
+            target=handle_client,
+            args=(old_server, None, registry, master, queue),
+            daemon=True,
+        )
+        stale_thread.start()
+        send_msg(old_client, result_message())
+        stale_thread.join(timeout=2)
+
+        assert not stale_thread.is_alive()
+        assert queue.get_task("stale-session-task")["status"] == "running"
+
+        active_thread = threading.Thread(
+            target=handle_client,
+            args=(new_server, None, registry, master, queue),
+            daemon=True,
+        )
+        active_thread.start()
+        new_client.settimeout(2)
+
+        send_msg(new_client, result_message())
+        response = recv_msgs(new_client, bytearray())
+
+        assert response
+        assert response[0]["type"] == "task_ack"
+        assert response[0]["payload"]["accepted"] is True
+        assert queue.get_task("stale-session-task")["status"] == "completed"
+
+    finally:
+        for sock in (old_client, new_client, old_server, new_server):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def test_task_completion_blocks_concurrent_worker_reconnect():
+    from unittest.mock import patch
+
+    registry = MasterRegistry()
+    worker_id = "11111111-1111-4111-8111-111111111111"
+    old_server, old_client = socket.socketpair()
+    new_server, new_client = socket.socketpair()
+
+    queue = MasterTaskQueue()
+    queue.submit({
+        "task_id": "concurrent-reconnect-task",
+        "task_kind": "sum_range",
+        "parameters": {"start": 1, "end": 10},
+    })
+    assignment = queue.claim_next_task(
+        worker_id,
+        assignment_epoch=0,
+        loan_id=None,
+    )
+    assert assignment is not None
+
+    entered_completion = threading.Event()
+    release_completion = threading.Event()
+    reconnect_finished = threading.Event()
+    errors = []
+    result = {}
+
+    original_complete = queue.complete_task
+
+    def delayed_complete(*args, **kwargs):
+        entered_completion.set()
+        if not release_completion.wait(timeout=3):
+            raise AssertionError("Timeout aguardando liberacao da conclusao")
+        return original_complete(*args, **kwargs)
+
+    def complete_result():
+        try:
+            with registry._lock:
+                assert registry.is_active_session(worker_id, old_server)
+                result["value"] = queue.complete_task(
+                    "concurrent-reconnect-task",
+                    assignment["attempt_id"],
+                    accepted=True,
+                    reason="completed",
+                    payload={
+                        "status": "ok",
+                        "result": {"sum": 55},
+                        "assignment_epoch": 0,
+                        "loan_id": None,
+                    },
+                    worker_id=worker_id,
+                )
+        except BaseException as exc:
+            errors.append(exc)
+
+    def reconnect():
+        try:
+            registry.bind_session(worker_id, new_server)
+            reconnect_finished.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    try:
+        registry.bind_session(worker_id, old_server)
+
+        with patch.object(queue, "complete_task", side_effect=delayed_complete):
+            completion_thread = threading.Thread(target=complete_result, daemon=True)
+            completion_thread.start()
+
+            assert entered_completion.wait(timeout=2)
+
+            reconnect_thread = threading.Thread(target=reconnect, daemon=True)
+            reconnect_thread.start()
+
+            assert not reconnect_finished.wait(timeout=0.15)
+
+            release_completion.set()
+
+            completion_thread.join(timeout=3)
+            reconnect_thread.join(timeout=3)
+
+        assert not errors, errors
+        assert not completion_thread.is_alive()
+        assert not reconnect_thread.is_alive()
+        assert result["value"][0] is True
+        assert reconnect_finished.is_set()
+        assert registry.is_active_session(worker_id, new_server)
+        assert queue.get_task("concurrent-reconnect-task")["status"] == "completed"
+
+    finally:
+        release_completion.set()
+        for sock in (old_client, new_client, old_server, new_server):
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+
+def test_master_reuses_cached_task_result_ack_without_completing_twice():
+    from unittest.mock import patch
+
+    registry = MasterRegistry()
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+
+    queue = MasterTaskQueue()
+    queue.submit({
+        "task_id": "dedup-result-task",
+        "task_kind": "sum_range",
+        "parameters": {"start": 1, "end": 10},
+    })
+    assignment = queue.claim_next_task(
+        worker["node_id"],
+        assignment_epoch=0,
+        loan_id=None,
+    )
+    assert assignment is not None
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_result",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": worker,
+        "destination": master,
+        "payload": {
+            "task_id": "dedup-result-task",
+            "task_label": "dedup-result-task",
+            "attempt_id": assignment["attempt_id"],
+            "status": "ok",
+            "result": {"sum": 55},
+            "error_code": None,
+            "assignment_epoch": 0,
+            "loan_id": None,
+        },
+    }
+
+    server, client = socket.socketpair()
+    registry.bind_session(worker["node_id"], server)
+
+    thread = threading.Thread(
+        target=handle_client,
+        args=(server, None, registry, master, queue),
+        daemon=True,
+    )
+    thread.start()
+    client.settimeout(2)
+
+    try:
+        with patch.object(queue, "complete_task", wraps=queue.complete_task) as complete:
+            send_msg(client, message)
+            first = recv_msgs(client, bytearray())
+
+            assert first
+            assert first[0]["type"] == "task_ack"
+            assert first[0]["payload"]["accepted"] is True
+
+            send_msg(client, message)
+            second = recv_msgs(client, bytearray())
+
+            assert second
+            assert second[0] == first[0]
+            assert complete.call_count == 1
+
+        assert queue.get_task("dedup-result-task")["status"] == "completed"
+        assert registry.get_processed_response(message) == first[0]
+
+    finally:
+        client.close()
+        thread.join(timeout=2)
+        server.close()
+
+
+def test_concurrent_task_result_retransmission_reuses_original_ack():
+    from unittest.mock import patch
+    from protocol import build_task_ack_message
+
+    registry = MasterRegistry()
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+
+    queue = MasterTaskQueue()
+    queue.submit({
+        "task_id": "concurrent-dedup-task",
+        "task_kind": "sum_range",
+        "parameters": {"start": 1, "end": 10},
+    })
+    assignment = queue.claim_next_task(
+        worker["node_id"],
+        assignment_epoch=0,
+        loan_id=None,
+    )
+    assert assignment is not None
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "task_result",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": worker,
+        "destination": master,
+        "payload": {
+            "task_id": "concurrent-dedup-task",
+            "task_label": "concurrent-dedup-task",
+            "attempt_id": assignment["attempt_id"],
+            "status": "ok",
+            "result": {"sum": 55},
+            "error_code": None,
+            "assignment_epoch": 0,
+            "loan_id": None,
+        },
+    }
+
+    server, client = socket.socketpair()
+    registry.bind_session(worker["node_id"], server)
+
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+    responses = []
+    original_complete = queue.complete_task
+
+    def delayed_complete(*args, **kwargs):
+        entered.set()
+        if not release.wait(timeout=3):
+            raise AssertionError("Timeout aguardando liberacao")
+        return original_complete(*args, **kwargs)
+
+    def process_result():
+        try:
+            with registry._lock:
+                assert registry.is_active_session(worker["node_id"], server)
+                if registry.has_request_conflict(message):
+                    raise AssertionError("Conflito inesperado")
+                response = registry.get_processed_response(message)
+                if response is None:
+                    accepted, reason = queue.complete_task(
+                        message["payload"]["task_id"],
+                        message["payload"]["attempt_id"],
+                        accepted=True,
+                        reason="completed",
+                        payload=message["payload"],
+                        worker_id=worker["node_id"],
+                    )
+                    response = build_task_ack_message(
+                        message,
+                        source=master,
+                        destination=worker,
+                        task_id=message["payload"]["task_id"],
+                        attempt_id=message["payload"]["attempt_id"],
+                        accepted=accepted,
+                        reason=reason,
+                    )
+                    registry.remember_processed_message(message, response)
+                responses.append(response)
+        except BaseException as exc:
+            errors.append(exc)
+
+    try:
+        with patch.object(queue, "complete_task", side_effect=delayed_complete) as complete:
+            first = threading.Thread(target=process_result, daemon=True)
+            first.start()
+            assert entered.wait(timeout=2)
+
+            second = threading.Thread(target=process_result, daemon=True)
+            second.start()
+
+            release.set()
+            first.join(timeout=3)
+            second.join(timeout=3)
+
+            assert not errors, errors
+            assert complete.call_count == 1
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert len(responses) == 2
+        assert responses[0] == responses[1]
+        assert responses[0]["payload"]["accepted"] is True
+        assert queue.get_task("concurrent-dedup-task")["status"] == "completed"
+
+    finally:
+        release.set()
+        client.close()
+        server.close()
+
+
+def test_worker_limits_result_to_three_sends_per_session():
+    from worker.worker import WorkerSessionManager
+
+    class FakeSession:
+        def __init__(self):
+            self.messages = []
+
+        def is_closed(self):
+            return False
+
+        def send_message(self, message):
+            self.messages.append(message)
+
+    manager = WorkerSessionManager("127.0.0.1", 9000, {})
+    session = FakeSession()
+
+    manager.pending_results["task-1::attempt-1"] = {
+        "task_id": "task-1",
+        "attempt_id": "attempt-1",
+        "message": {"type": "task_result"},
+        "last_sent_at": 0.0,
+        "send_count": 1,
+        "retry_session_id": id(session),
+        "session_send_count": 1,
+    }
+
+    assert manager.retransmit_pending_results(session) == 1
+
+    pending = manager.pending_results["task-1::attempt-1"]
+    pending["last_sent_at"] -= 5.0
+
+    assert manager.retransmit_pending_results(session) == 1
+
+    pending["last_sent_at"] -= 5.0
+
+    assert manager.retransmit_pending_results(session) == 0
+    assert len(session.messages) == 2
+    assert pending["session_send_count"] == 3
+    assert pending["send_count"] == 3
+    assert "task-1::attempt-1" in manager.pending_results
+
+
+def test_worker_failed_retransmission_does_not_consume_attempt():
+    import pytest
+    from worker.worker import WorkerSessionManager
+
+    class FailingSession:
+        def is_closed(self):
+            return False
+
+        def send_message(self, message):
+            raise OSError("simulated connection failure")
+
+    manager = WorkerSessionManager("127.0.0.1", 9000, {})
+    session = FailingSession()
+
+    key = "task-1::attempt-1"
+    manager.pending_results[key] = {
+        "task_id": "task-1",
+        "attempt_id": "attempt-1",
+        "message": {"type": "task_result"},
+        "last_sent_at": 0.0,
+        "send_count": 1,
+        "retry_session_id": id(session),
+        "session_send_count": 1,
+    }
+
+    with pytest.raises(OSError, match="simulated connection failure"):
+        manager.retransmit_pending_results(session)
+
+    pending = manager.pending_results[key]
+    assert pending["session_send_count"] == 1
+    assert pending["send_count"] == 1
+    assert pending["last_sent_at"] == 0.0
+    assert key in manager.pending_results
+
+
+def test_performance_report_protocol_validation():
+    from protocol import build_performance_report_message, validate_message
+
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    collector = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "collector",
+        "node_role": "collector",
+    }
+    metrics = {
+        "uptime_seconds": 30,
+        "tasks_pending": 1,
+        "tasks_running": 2,
+        "tasks_completed": 5,
+        "tasks_failed": 0,
+        "workers_owned": 3,
+        "workers_active_here": 3,
+        "workers_busy": 2,
+        "workers_idle": 1,
+        "workers_reserved": 0,
+        "workers_lent": 0,
+        "workers_received": 0,
+        "workers_unavailable": 0,
+        "thresholds": {
+            "saturation_threshold": 10,
+            "release_threshold": 3,
+        },
+        "loans": [],
+        "neighbors": [],
+    }
+
+    message = build_performance_report_message(
+        master,
+        collector,
+        metrics=metrics,
+    )
+
+    assert validate_message(message) is True
+    assert message["type"] == "performance_report"
+    assert message["payload"] == metrics
+
+
+def test_performance_report_rejects_invalid_counters():
+    from protocol import validate_performance_report_payload
+
+    metrics = {
+        "uptime_seconds": 10,
+        "tasks_pending": 0,
+        "tasks_running": 1,
+        "tasks_completed": 2,
+        "tasks_failed": 0,
+        "workers_owned": 2,
+        "workers_active_here": 2,
+        "workers_busy": 1,
+        "workers_idle": 1,
+        "workers_reserved": 0,
+        "workers_lent": 0,
+        "workers_received": 0,
+        "workers_unavailable": 0,
+        "thresholds": {},
+        "loans": [],
+        "neighbors": [],
+    }
+
+    assert validate_performance_report_payload(metrics) is True
+
+    invalid = dict(metrics)
+    invalid["tasks_completed"] = -1
+    assert validate_performance_report_payload(invalid) is False
+
+    invalid = dict(metrics)
+    invalid["workers_active_here"] = 5
+    assert validate_performance_report_payload(invalid) is False
+
+    invalid = dict(metrics)
+    invalid.pop("tasks_running")
+    assert validate_performance_report_payload(invalid) is False
+
+    invalid = dict(metrics)
+    invalid["loans"] = {}
+    assert validate_performance_report_payload(invalid) is False
+
+
+def test_collector_tcp_receives_and_persists_performance_report(tmp_path):
+    from collector.collector import receive_performance_reports
+    from protocol import build_performance_report_message
+
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    collector = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "collector",
+        "node_role": "collector",
+    }
+    metrics = {
+        "uptime_seconds": 10,
+        "tasks_pending": 0,
+        "tasks_running": 1,
+        "tasks_completed": 2,
+        "tasks_failed": 0,
+        "workers_owned": 2,
+        "workers_active_here": 2,
+        "workers_busy": 1,
+        "workers_idle": 1,
+        "workers_reserved": 0,
+        "workers_lent": 0,
+        "workers_received": 0,
+        "workers_unavailable": 0,
+        "thresholds": {},
+        "loans": [],
+        "neighbors": [],
+    }
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    thread = threading.Thread(
+        target=receive_performance_reports,
+        kwargs={
+            "host": "127.0.0.1",
+            "port": port,
+            "output_dir": tmp_path,
+            "collector_identity": collector,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    message = build_performance_report_message(master, collector, metrics=metrics)
+
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1.0) as conn:
+                send_msg(conn, message)
+            break
+        except (ConnectionRefusedError, TimeoutError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+    report_path = tmp_path / "performance_reports.jsonl"
+
+    while not report_path.exists():
+        if time.monotonic() >= deadline:
+            pytest.fail("Collector did not persist performance_report")
+        time.sleep(0.02)
+
+    lines = report_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    saved = json.loads(lines[0])
+    assert saved["type"] == "performance_report"
+    assert saved["payload"] == metrics
