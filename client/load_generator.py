@@ -1,7 +1,8 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import socket
 import time
+import uuid
 from typing import Any
 
 from client.client import TaskClient
@@ -32,7 +33,7 @@ def submit_load_plan(*, host: str, port: int, task_count: int = 200, start: int 
     client = TaskClient(host=host, port=port, node_label=node_label, timeout=10.0)
     replies: list[dict[str, Any]] = []
     for index, task in enumerate(build_load_plan(task_count=task_count, start=start, end=end, interval_ms=interval_ms, seed=seed)):
-        ack = client.submit_task(task["task_id"], start=int(task["parameters"]["start"]), end=int(task["parameters"]["end"]), timeout=10.0, request_id=f"load-{seed}-{index:04d}")
+        ack = client.submit_task(task["task_id"], start=int(task["parameters"]["start"]), end=int(task["parameters"]["end"]), timeout=10.0, request_id=str(uuid.UUID(int=(uuid.uuid5(uuid.NAMESPACE_DNS, f"load-{seed}-{index:04d}").int & ~(0xF << 76) | (4 << 76)))))
         replies.append(ack)
         if index + 1 < task_count and interval_ms > 0:
             time.sleep(max(0.0, interval_ms / 1000.0))

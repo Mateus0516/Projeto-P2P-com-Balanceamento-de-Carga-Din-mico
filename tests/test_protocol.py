@@ -1,4 +1,4 @@
-import json
+﻿import json
 import socket
 import sys
 import threading
@@ -1320,8 +1320,18 @@ def test_master_returns_protocol_error_for_invalid_task_submit_over_tcp():
     reply = exchange(invalid)
     assert reply is not None
     assert reply["type"] == "protocol_error"
-    assert reply["payload"]["status"] == "error"
-    assert "reason" in reply["payload"]
+    assert reply["payload"]["error_code"] in {
+        "invalid_message",
+        "invalid_state",
+        "stale_epoch",
+        "reservation_expired",
+        "identity_conflict",
+        "request_conflict",
+        "unsupported_version",
+        "unsupported_type",
+    }
+    assert isinstance(reply["payload"]["error_message"], str)
+    assert reply["payload"]["error_message"].strip()
     assert len(task_queue.pending()) == 0
 
 
@@ -1374,6 +1384,149 @@ def test_ct_02_two_workers_reconnect_and_identity_conflict_acceptance():
     registry.upsert_worker(worker_b)
     assert len(registry.workers) == 2
     assert set(registry.node_labels) == {"worker-a", "worker-b"}
+
+
+
+def test_ct_02_reconnect_with_cached_ack_closes_old_socket():
+    import uuid
+
+    registry = MasterRegistry()
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000124,
+        "source": worker,
+        "destination": master,
+        "payload": {
+            "home_master": {**master, "host": "127.0.0.1", "port": 9000},
+            "assignment_epoch": 0,
+            "loan_id": None,
+            "host": "127.0.0.1",
+            "port": 9101,
+        },
+    }
+
+    s1, c1 = socket.socketpair()
+    s2, c2 = socket.socketpair()
+    threads = []
+
+    try:
+        for server in (s1, s2):
+            thread = threading.Thread(
+                target=handle_client,
+                args=(server, None, registry, master),
+                daemon=True,
+            )
+            thread.start()
+            threads.append(thread)
+
+        c1.settimeout(2)
+        c2.settimeout(2)
+
+        send_msg(c1, message)
+        first = recv_msgs(c1, bytearray())
+        assert first and first[0]["type"] == "registration_ack"
+
+        registry.mark_worker_unavailable(worker["node_id"], "connection_lost")
+        assert registry.get_worker(worker["node_id"])["status"] == "unavailable"
+
+        send_msg(c2, message)
+        second = recv_msgs(c2, bytearray())
+        assert second and second[0] == first[0]
+
+        assert registry.active_sessions[worker["node_id"]] is s2
+
+        threads[0].join(timeout=2)
+        assert not threads[0].is_alive()
+        assert registry.get_worker(worker["node_id"])["status"] == "available"
+    finally:
+        for sock in (c1, c2, s1, s2):
+            try:
+                sock.close()
+            except OSError:
+                pass
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+def test_ct_02_request_conflict_over_tcp():
+    import uuid
+
+    registry = MasterRegistry()
+    master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "register_worker",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000124,
+        "source": worker,
+        "destination": master,
+        "payload": {
+            "home_master": {**master, "host": "127.0.0.1", "port": 9000},
+            "assignment_epoch": 0,
+            "loan_id": None,
+            "host": "127.0.0.1",
+            "port": 9101,
+        },
+    }
+
+    server, client = socket.socketpair()
+    thread = threading.Thread(
+        target=handle_client,
+        args=(server, None, registry, master),
+        daemon=True,
+    )
+    thread.start()
+
+    try:
+        client.settimeout(2)
+        buffer = bytearray()
+
+        send_msg(client, message)
+        first = recv_msgs(client, buffer)
+        assert first and first[0]["type"] == "registration_ack"
+
+        conflicting = {
+            **message,
+            "message_id": str(uuid.uuid4()),
+            "payload": {**message["payload"], "port": 9999},
+        }
+
+        send_msg(client, conflicting)
+        second = recv_msgs(client, buffer)
+
+        assert second and second[0]["type"] == "protocol_error"
+        assert second[0]["payload"]["error_code"] == "request_conflict"
+    finally:
+        client.close()
+        thread.join(timeout=2)
+        server.close()
 
 
 def test_sum_range_computes_expected_totals():
@@ -2832,11 +2985,39 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     }
     malformed_json = '{"version":"sd_2026_2_v1","type":'
 
-    for message in (missing_field, wrong_capitalization, unknown_type, unknown_version):
+    bad_key = dict(unknown_type)
+    bad_key["type"] = "heartbeat"
+    bad_key["BadKey"] = "invalid"
+
+    list_type = dict(unknown_type)
+    list_type["type"] = []
+
+    cases = (
+        (missing_field, "invalid_message"),
+        (wrong_capitalization, "invalid_message"),
+        (unknown_type, "unsupported_type"),
+        (unknown_version, "unsupported_version"),
+        (bad_key, "invalid_message"),
+        (list_type, "invalid_message"),
+    )
+
+    for message, expected_code in cases:
         reply = exchange(message)
         assert reply is not None
         assert reply["type"] == "protocol_error"
-        assert "reason" in reply["payload"]
+        assert reply["payload"]["error_code"] == expected_code
+        assert reply["payload"]["error_code"] in {
+            "invalid_message",
+            "invalid_state",
+            "stale_epoch",
+            "reservation_expired",
+            "identity_conflict",
+            "request_conflict",
+            "unsupported_version",
+            "unsupported_type",
+        }
+        assert isinstance(reply["payload"]["error_message"], str)
+        assert reply["payload"]["error_message"].strip()
 
     assert exchange(malformed_json) is None
 
@@ -2870,10 +3051,218 @@ def test_ct_03_invalid_messages_protocol_error_and_recovery_acceptance():
     valid_reply = exchange(valid_message)
     assert valid_reply is not None
     assert valid_reply["type"] == "registration_ack"
-    assert valid_reply["payload"]["status"] == "accepted"
+    assert valid_reply["payload"]["accepted"] is True
     assert len(registry.workers) == 1
     assert registry.workers["44444444-4444-4444-8444-444444444444"]["node_label"] == "worker-good"
 
+
+
+def test_ct_03_recovers_on_same_connection():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    worker_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "44444444-4444-4444-8444-444444444444",
+        "node_label": "worker-good",
+        "node_role": "worker",
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    thread = threading.Thread(
+        target=handle_client,
+        args=(server_sock, None, registry, master_identity),
+        daemon=True,
+    )
+    thread.start()
+    client_sock.settimeout(2)
+
+    def receive():
+        data = bytearray()
+        while b"\n" not in data:
+            chunk = client_sock.recv(4096)
+            if not chunk:
+                raise AssertionError("Conexao encerrada antes da resposta")
+            data.extend(chunk)
+        return json.loads(data.split(b"\n", 1)[0].decode("utf-8"))
+
+    try:
+        invalid = {
+            "version": "sd_2026_2_v1",
+            "type": "unknown_event",
+            "message_id": str(uuid.uuid4()),
+            "request_id": str(uuid.uuid4()),
+            "timestamp_ms": 1727170000123,
+            "source": worker_identity,
+            "destination": master_identity,
+            "payload": {},
+        }
+
+        send_msg(client_sock, invalid)
+        error = receive()
+
+        assert error["type"] == "protocol_error"
+        assert error["payload"]["error_code"] == "unsupported_type"
+        assert error["request_id"] == invalid["request_id"]
+
+        valid = {
+            "version": "sd_2026_2_v1",
+            "type": "register_worker",
+            "message_id": str(uuid.uuid4()),
+            "request_id": str(uuid.uuid4()),
+            "timestamp_ms": 1727170000456,
+            "source": worker_identity,
+            "destination": master_identity,
+            "payload": build_register_payload(
+                {**master_identity, "host": "127.0.0.1", "port": 9000},
+                "127.0.0.1",
+                9106,
+                assignment_epoch=1,
+                loan_id="loan-recovery",
+            ),
+        }
+
+        send_msg(client_sock, valid)
+        response = receive()
+
+        assert response["type"] == "registration_ack"
+        assert response["request_id"] == valid["request_id"]
+        assert worker_identity["node_id"] in registry.workers
+
+    finally:
+        client_sock.close()
+        thread.join(timeout=2)
+
+
+def test_ct_03_protocol_error_does_not_trigger_another_error():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master",
+        "node_role": "master",
+    }
+    worker_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "44444444-4444-4444-8444-444444444444",
+        "node_label": "worker-good",
+        "node_role": "worker",
+    }
+
+    server_sock, client_sock = socket.socketpair()
+    thread = threading.Thread(
+        target=handle_client,
+        args=(server_sock, None, registry, master_identity),
+        daemon=True,
+    )
+    thread.start()
+    client_sock.settimeout(0.5)
+
+    try:
+        message = {
+            "version": "sd_2026_2_v1",
+            "type": "protocol_error",
+            "message_id": str(uuid.uuid4()),
+            "request_id": str(uuid.uuid4()),
+            "timestamp_ms": 1727170000123,
+            "source": worker_identity,
+            "destination": master_identity,
+            "payload": {
+                "error_code": "invalid_message",
+                "error_message": "Erro recebido do worker",
+            },
+        }
+
+        send_msg(client_sock, message)
+
+        try:
+            response = client_sock.recv(4096)
+        except socket.timeout:
+            response = None
+
+        assert response is None, (
+            "Master respondeu a um protocol_error recebido"
+        )
+        assert thread.is_alive(), (
+            "Master encerrou a conexao inesperadamente"
+        )
+
+    finally:
+        client_sock.close()
+        thread.join(timeout=2)
+
+
+def test_ct_01_oversized_residual_closes_only_bad_connection():
+    registry = MasterRegistry()
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": str(uuid.uuid4()),
+        "node_label": "master",
+        "node_role": "master",
+    }
+
+    def connect():
+        server, client = socket.socketpair()
+        thread = threading.Thread(
+            target=handle_client,
+            args=(server, None, registry, master_identity),
+            daemon=True,
+        )
+        thread.start()
+        client.settimeout(3)
+        return client, thread
+
+    bad_client, bad_thread = connect()
+
+    try:
+        bad_client.sendall(b"A" * 65537)
+
+        assert bad_client.recv(4096) == b""
+
+        bad_thread.join(timeout=2)
+        assert not bad_thread.is_alive()
+
+        good_client, good_thread = connect()
+
+        try:
+            worker_identity = {
+                "group_label": "p2p-cluster",
+                "node_id": str(uuid.uuid4()),
+                "node_label": "worker-test",
+                "node_role": "worker",
+            }
+
+            message = {
+                "version": "sd_2026_2_v1",
+                "type": "unknown_event",
+                "message_id": str(uuid.uuid4()),
+                "request_id": str(uuid.uuid4()),
+                "timestamp_ms": 1727170000123,
+                "source": worker_identity,
+                "destination": master_identity,
+                "payload": {},
+            }
+
+            send_msg(good_client, message)
+
+            replies = recv_msgs(good_client, bytearray())
+
+            assert replies is not None
+            assert len(replies) == 1
+            assert replies[0]["type"] == "protocol_error"
+            assert replies[0]["payload"]["error_code"] == "unsupported_type"
+
+        finally:
+            good_client.close()
+            good_thread.join(timeout=2)
+
+    finally:
+        bad_client.close()
 
 def test_ct_01_ndjson_tcp_framing_acceptance():
     buffer = bytearray()
@@ -3282,7 +3671,7 @@ def test_register_worker_payload_requires_home_master_assignment_and_loan_id(tmp
 
     valid_reply = exchange(valid_request)
     assert valid_reply["type"] == "registration_ack"
-    assert valid_reply["payload"]["status"] == "accepted"
+    assert valid_reply["payload"]["accepted"] is True
     assert valid_reply["payload"]["assignment_epoch"] == 0
     assert valid_reply["payload"]["worker"]["node_label"] == "worker-a"
 
@@ -3302,7 +3691,8 @@ def test_register_worker_payload_requires_home_master_assignment_and_loan_id(tmp
     }
     invalid_reply = exchange(invalid_request)
     assert invalid_reply["type"] == "protocol_error"
-    assert "assignment_epoch" in invalid_reply["payload"]["reason"].lower()
+    assert invalid_reply["payload"]["error_code"] == "invalid_message"
+    assert "assignment_epoch" in invalid_reply["payload"]["error_message"].lower()
 
 
 def test_register_worker_rejects_group_label_mismatch_and_master_stays_operational():
@@ -3349,7 +3739,7 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
     }
 
     rejected_reply = register_once(rejected_request)
-    assert rejected_reply["payload"]["status"] == "rejected"
+    assert rejected_reply["payload"]["accepted"] is False
     assert "group_label" in str(rejected_reply["payload"]["reason"]).lower()
     assert len(registry.workers) == 0
 
@@ -3375,7 +3765,7 @@ def test_register_worker_rejects_group_label_mismatch_and_master_stays_operation
     }
 
     accepted_reply = register_once(accepted_request)
-    assert accepted_reply["payload"]["status"] == "accepted"
+    assert accepted_reply["payload"]["accepted"] is True
     assert len(registry.workers) == 1
     assert registry.workers["44444444-4444-4444-8444-444444444444"]["node_label"] == "worker-good"
 
@@ -3590,9 +3980,9 @@ def test_build_ack_message_uses_official_envelope_and_echoes_request_id():
     assert ack["message_id"] != request["message_id"]
     assert ack["source"]["node_role"] == "master"
     assert ack["destination"]["node_role"] == "worker"
-    assert ack["payload"]["status"] == "accepted"
+    assert ack["payload"]["accepted"] is True
 
-    assert rejected["payload"]["status"] == "rejected"
+    assert rejected["payload"]["accepted"] is False
     assert rejected["payload"]["reason"] == "duplicate node_label"
 
 
@@ -3981,7 +4371,7 @@ def test_send_with_retry_success_on_first_attempt():
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
         "payload": {"home_master": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
     }
-    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"status": "accepted"}}
+    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"accepted": True, "assignment_epoch": 0, "reason": None}}
     fake = FakeReplySession([ack])
 
     result = send_with_retry(fake, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
@@ -4049,7 +4439,7 @@ def test_send_with_retry_preserves_same_message_logical_content_across_attempts(
         "destination": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master"},
         "payload": {"home_master": {"group_label": "p2p-cluster", "node_id": "22222222-2222-4222-8222-222222222222", "node_label": "master", "node_role": "master", "host": "127.0.0.1", "port": 9000}, "assignment_epoch": 0, "loan_id": None, "host": "127.0.0.1", "port": 9101},
     }
-    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"status": "accepted"}}
+    ack = {"type": "registration_ack", "request_id": message["request_id"], "payload": {"accepted": True, "assignment_epoch": 0, "reason": None}}
     fake = FakeReplySession([TimeoutError("timed out"), TimeoutError("timed out"), ack])
 
     result = send_with_retry(fake, message, expect_type="registration_ack", timeout=5.0, max_attempts=3)
@@ -4164,7 +4554,7 @@ def test_handle_client_deduplicates_retransmitted_register_worker_and_reuses_cac
     send_msg(client_sock, message)
     first_reply = json.loads(client_sock.recv(4096).decode("utf-8").strip())
     assert first_reply["type"] == "registration_ack"
-    assert first_reply["payload"]["status"] == "accepted"
+    assert first_reply["payload"]["accepted"] is True
     assert len(registry.workers) == 1
 
     send_msg(client_sock, message)

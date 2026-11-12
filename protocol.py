@@ -352,9 +352,14 @@ def validate_message(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
 
-    for field in REQUIRED_MESSAGE_FIELDS:
-        if field not in message:
-            return False
+    if not set(REQUIRED_MESSAGE_FIELDS).issubset(message):
+        return False
+
+    if any(not isinstance(key, str) or not key.isascii() or not key.isidentifier() or key.lower() != key or "__" in key for key in message):
+        return False
+
+    if not isinstance(message.get("type"), str):
+        return False
 
     if message["version"] != "sd_2026_2_v1":
         return False
@@ -387,6 +392,40 @@ def validate_message(message: Any) -> bool:
     payload = message["payload"]
     if payload is None:
         return False
+
+    if message["type"] == "protocol_error":
+        if not isinstance(payload, dict):
+            return False
+        valid_error_codes = {
+            "invalid_message",
+            "invalid_state",
+            "stale_epoch",
+            "reservation_expired",
+            "identity_conflict",
+            "request_conflict",
+            "unsupported_version",
+            "unsupported_type",
+        }
+        if payload.get("error_code") not in valid_error_codes:
+            return False
+        if not isinstance(payload.get("error_message"), str) or not payload["error_message"].strip():
+            return False
+
+    if message["type"] == "registration_ack":
+        if not isinstance(payload, dict):
+            return False
+        if not isinstance(payload.get("accepted"), bool):
+            return False
+        epoch = payload.get("assignment_epoch")
+        if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+            return False
+        if "reason" not in payload:
+            return False
+        if payload["accepted"]:
+            if payload["reason"] is not None:
+                return False
+        elif not isinstance(payload["reason"], str) or not payload["reason"].strip():
+            return False
 
     if message["type"] == "register_worker":
         ok, _ = validate_register_worker_payload(payload)
@@ -694,7 +733,19 @@ def build_protocol_error_message(message: dict, master_identity: dict, reason: s
     if not isinstance(message, dict):
         raise ValueError("protocol_error requires a message dict")
 
-    request_id = str(message.get("request_id", "unknown"))
+    original_request_id = message.get("request_id")
+    try:
+        parsed_request_id = uuid.UUID(original_request_id)
+        if (
+            not isinstance(original_request_id, str)
+            or parsed_request_id.version != 4
+            or str(parsed_request_id) != original_request_id
+        ):
+            raise ValueError("invalid request_id")
+        request_id = original_request_id
+    except (ValueError, TypeError, AttributeError):
+        request_id = str(uuid.uuid4())
+
     source = message.get("source") if isinstance(message.get("source"), dict) else {}
     destination = message.get("destination") if isinstance(message.get("destination"), dict) else {}
     unsafe_source = {
@@ -722,7 +773,14 @@ def build_protocol_error_message(message: dict, master_identity: dict, reason: s
             "node_role": str(master_identity.get("node_role", "master")),
         },
         "destination": unsafe_source or unsafe_destination,
-        "payload": {"status": "error", "reason": str(reason)},
+        "payload": {
+            "error_code": (
+                "unsupported_version" if "unknown protocol version" in str(reason)
+                else "unsupported_type" if "unknown message type" in str(reason)
+                else "invalid_message"
+            ),
+            "error_message": str(reason),
+        },
     }
 
 
@@ -818,7 +876,16 @@ def recv_msgs(sock: socket.socket, buffer: bytearray) -> List[dict] | None:
         return None
 
     buffer.extend(chunk)
-    return extract_complete_messages(buffer)
+
+    messages = extract_complete_messages(buffer)
+
+    if len(buffer) > MAX_NDJSON_MESSAGE_BYTES:
+        buffer.clear()
+        raise ValueError(
+            "NDJSON buffer exceeded 65536 bytes without newline"
+        )
+
+    return messages
 
 
 class MasterRegistry:
@@ -826,7 +893,26 @@ class MasterRegistry:
         self.workers = {}
         self.node_labels = {}
         self.processed_message_keys = {}
+        self.processed_message_contents = {}
+        self.active_sessions = {}
         self._lock = threading.RLock()
+
+    def bind_session(self, node_id: str, conn) -> object | None:
+        with self._lock:
+            previous = self.active_sessions.get(node_id)
+            self.active_sessions[node_id] = conn
+            return previous if previous is not conn else None
+
+    def is_active_session(self, node_id: str, conn) -> bool:
+        with self._lock:
+            return self.active_sessions.get(node_id) is conn
+
+    def release_session(self, node_id: str, conn) -> bool:
+        with self._lock:
+            if self.active_sessions.get(node_id) is not conn:
+                return False
+            del self.active_sessions[node_id]
+            return True
 
     def remember_processed_message(self, message: dict, response: dict) -> dict:
         with self._lock:
@@ -837,6 +923,15 @@ class MasterRegistry:
                 return response
             key = (str(source.get("node_id", "")), str(message.get("request_id", "")), str(message.get("type", "")))
             self.processed_message_keys[key] = response
+            self.processed_message_contents[key] = json.dumps(
+                {
+                    "source": message.get("source"),
+                    "destination": message.get("destination"),
+                    "payload": message.get("payload"),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
             return response
 
     def get_processed_response(self, message: dict) -> dict | None:
@@ -848,6 +943,34 @@ class MasterRegistry:
                 return None
             key = (str(source.get("node_id", "")), str(message.get("request_id", "")), str(message.get("type", "")))
             return self.processed_message_keys.get(key)
+
+    def has_request_conflict(self, message: dict) -> bool:
+        with self._lock:
+            if not isinstance(message, dict):
+                return False
+            source = message.get("source")
+            if not isinstance(source, dict):
+                return False
+
+            key = (
+                str(source.get("node_id", "")),
+                str(message.get("request_id", "")),
+                str(message.get("type", "")),
+            )
+            original = self.processed_message_contents.get(key)
+            if original is None:
+                return False
+
+            current = json.dumps(
+                {
+                    "source": message.get("source"),
+                    "destination": message.get("destination"),
+                    "payload": message.get("payload"),
+                },
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            return current != original
 
     def upsert_worker(self, worker: dict) -> dict:
         with self._lock:
@@ -885,6 +1008,15 @@ class MasterRegistry:
             if candidate.get("node_label"):
                 self.node_labels[candidate["node_label"]] = candidate["node_id"]
             return self.workers[candidate["node_id"]]
+
+    def mark_session_unavailable(
+        self, node_id: str, conn, reason: str = "socket closed"
+    ) -> bool:
+        with self._lock:
+            if self.active_sessions.get(node_id) is not conn:
+                return False
+            self.mark_worker_unavailable(node_id, reason=reason)
+            return True
 
     def mark_worker_unavailable(self, node_id: str, reason: str = "heartbeat timeout") -> dict | None:
         with self._lock:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import json
 import queue
@@ -781,9 +781,9 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
             log_event("ASD", node_label, "master", "registration_ack", message["request_id"], "timeout")
             return False
 
-        status = reply.get("payload", {}).get("status", "unknown")
+        accepted = reply.get("payload", {}).get("accepted")
         reason = reply.get("payload", {}).get("reason")
-        if status == "accepted":
+        if accepted is True:
             log_event("ASD", node_label, "master", reply["type"], reply["request_id"], "accepted")
             return True
 

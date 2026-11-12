@@ -119,8 +119,12 @@ class TaskClient:
                                     raise TaskClientError(f"invalid task_submit_ack from master: {packet!r}")
                                 return packet
                             if packet.get("type") == "protocol_error":
-                                reason = packet.get("payload", {}).get("reason", "unknown protocol error")
-                                raise TaskClientError(f"master rejected the task: {reason}")
+                                payload = packet.get("payload", {})
+                                if not isinstance(payload, dict):
+                                    payload = {}
+                                error_code = payload.get("error_code", "invalid_message")
+                                error_message = payload.get("error_message", "unknown protocol error")
+                                raise TaskClientError(f"master rejected the task [{error_code}]: {error_message}")
                         continue
 
                     time.sleep(0.05)

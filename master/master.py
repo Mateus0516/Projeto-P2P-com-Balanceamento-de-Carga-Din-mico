@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import gc
 import json
@@ -100,14 +100,13 @@ def build_ack_message(request_message: dict, status: str, master_identity: Dict[
         "node_role": source["node_role"],
     }
     ack_payload = {
-        "status": status,
+        "accepted": status == "accepted",
         "worker": worker_identity,
         "host": payload.get("host"),
         "port": payload.get("port"),
         "assignment_epoch": int(payload.get("assignment_epoch", 1)),
+        "reason": reason,
     }
-    if reason is not None:
-        ack_payload["reason"] = reason
     return {
         "version": "sd_2026_2_v1",
         "type": "registration_ack",
@@ -176,10 +175,14 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
         while not stop_event.is_set():
             if stop_event.wait(interval_seconds):
                 break
+            if not registry.is_active_session(worker_identity["node_id"], conn):
+                break
             sequence += 1
             request_id = str(uuid.uuid4())
             try:
                 with registry._lock:
+                    if not registry.is_active_session(worker_identity["node_id"], conn):
+                        break
                     worker = registry.get_worker(worker_identity["node_id"])
                     if worker is None:
                         break
@@ -190,9 +193,10 @@ def start_master_heartbeat_loop(conn: socket.socket, registry: MasterRegistry, m
                 log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "sent")
             except (BrokenPipeError, ConnectionResetError, OSError):
                 log_event("ASD", "master", worker_identity["node_label"], "heartbeat", request_id, "socket_closed")
-                registry.mark_worker_unavailable(worker_identity["node_id"], reason="socket closed")
-                if task_queue is not None:
-                    task_queue.handle_worker_unavailable(worker_identity["node_id"], reason="socket closed")
+                with registry._lock:
+                    if registry.mark_session_unavailable(worker_identity["node_id"], conn, reason="socket closed"):
+                        if task_queue is not None:
+                            task_queue.handle_worker_unavailable(worker_identity["node_id"], reason="socket closed")
                 stop_event.set()
                 try:
                     conn.shutdown(socket.SHUT_RDWR)
@@ -273,18 +277,42 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
         while not session_stop.is_set():
             try:
                 messages = recv_msgs(conn, buffer)
+            except ValueError as exc:
+                log_event(
+                    "ASD", "unknown", "master",
+                    "invalid_message", "unknown",
+                    f"connection closed: {exc}"
+                )
+                if current_worker_identity is not None:
+                    with registry._lock:
+                        if registry.is_active_session(current_worker_identity["node_id"], conn):
+                            registry.mark_session_unavailable(
+                                current_worker_identity["node_id"],
+                                conn,
+                                reason="NDJSON buffer limit exceeded"
+                            )
+                            if task_queue is not None:
+                                task_queue.handle_worker_unavailable(
+                                    current_worker_identity["node_id"],
+                                    reason="NDJSON buffer limit exceeded"
+                                )
+                break
             except OSError:
                 if current_worker_identity is not None:
-                    registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
-                    if task_queue is not None:
-                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
+                    with registry._lock:
+                        if registry.is_active_session(current_worker_identity["node_id"], conn):
+                            registry.mark_session_unavailable(current_worker_identity["node_id"], conn, reason="socket error")
+                            if task_queue is not None:
+                                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
                 break
 
             if messages is None:
                 if current_worker_identity is not None:
-                    registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
-                    if task_queue is not None:
-                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
+                    with registry._lock:
+                        if registry.is_active_session(current_worker_identity["node_id"], conn):
+                            registry.mark_session_unavailable(current_worker_identity["node_id"], conn, reason="socket closed")
+                            if task_queue is not None:
+                                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket closed")
                 break
 
             if not messages:
@@ -296,16 +324,60 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                 if not validate_message(message):
                     reason = classify_protocol_error(message)
                     log_event("ASD", message.get("source", {}).get("node_label", "unknown") if isinstance(message, dict) and isinstance(message.get("source"), dict) else "unknown", "master", "protocol_error", message.get("request_id", "unknown") if isinstance(message, dict) else "unknown", reason)
-                    if isinstance(message, dict):
-                        with write_lock:
-                            send_msg(conn, build_protocol_error_message(message, master_identity, reason))
+                    if isinstance(message, dict) and message.get("type") != "protocol_error":
+                        sender = message.get("source")
+                        if isinstance(sender, dict) and all(
+                            isinstance(sender.get(field), str) and sender.get(field)
+                            for field in ("group_label", "node_id", "node_label", "node_role")
+                        ):
+                            response = build_protocol_error_message(message, master_identity, reason)
+                            if validate_message(response):
+                                with write_lock:
+                                    send_msg(conn, response)
                     continue
 
                 msg_type = message["type"]
                 request_id = message["request_id"]
                 source = message["source"]
+                if registry.has_request_conflict(message):
+                    error_response = build_protocol_error_message(
+                        message,
+                        master_identity,
+                        "request_conflict",
+                    )
+                    error_response["payload"]["error_code"] = "request_conflict"
+                    error_response["payload"]["error_message"] = (
+                        "request_id reused with different content"
+                    )
+                    with write_lock:
+                        send_msg(conn, error_response)
+                    log_event(
+                        "ASD", source["node_label"], "master",
+                        "protocol_error", request_id, "request_conflict"
+                    )
+                    continue
+
                 cached_response = registry.get_processed_response(message)
                 if cached_response is not None:
+                    if msg_type == "register_worker" and cached_response.get("payload", {}).get("accepted") is True:
+                        worker = registry.get_worker(source["node_id"])
+                        if worker is not None:
+                            with registry._lock:
+                                worker = dict(worker)
+                                worker["status"] = "available"
+                                worker["heartbeat_misses"] = 0
+                                registry.upsert_worker(worker)
+                                previous_conn = registry.bind_session(source["node_id"], conn)
+                                current_worker_identity = worker
+                            if previous_conn is not None:
+                                try:
+                                    previous_conn.shutdown(socket.SHUT_RDWR)
+                                except OSError:
+                                    pass
+                                try:
+                                    previous_conn.close()
+                                except OSError:
+                                    pass
                     with write_lock:
                         send_msg(conn, cached_response)
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "deduplicated")
@@ -366,7 +438,17 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
+                    previous_conn = registry.bind_session(source["node_id"], conn)
                     current_worker_identity = worker_record
+                    if previous_conn is not None:
+                        try:
+                            previous_conn.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                        try:
+                            previous_conn.close()
+                        except OSError:
+                            pass
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "registered")
                     ack = build_ack_message(message, "accepted", master_identity)
                     registry.remember_processed_message(message, ack)
@@ -607,20 +689,28 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
     except ConnectionResetError:
         if current_worker_identity is not None:
-            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
-            if task_queue is not None:
-                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
+            with registry._lock:
+                if registry.is_active_session(current_worker_identity["node_id"], conn):
+                    registry.mark_session_unavailable(current_worker_identity["node_id"], conn, reason="connection reset")
+                    if task_queue is not None:
+                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="connection reset")
     except BrokenPipeError:
         if current_worker_identity is not None:
-            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
-            if task_queue is not None:
-                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
+            with registry._lock:
+                if registry.is_active_session(current_worker_identity["node_id"], conn):
+                    registry.mark_session_unavailable(current_worker_identity["node_id"], conn, reason="broken pipe")
+                    if task_queue is not None:
+                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="broken pipe")
     except OSError:
         if current_worker_identity is not None:
-            registry.mark_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
-            if task_queue is not None:
-                task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
+            with registry._lock:
+                if registry.is_active_session(current_worker_identity["node_id"], conn):
+                    registry.mark_session_unavailable(current_worker_identity["node_id"], conn, reason="socket error")
+                    if task_queue is not None:
+                        task_queue.handle_worker_unavailable(current_worker_identity["node_id"], reason="socket error")
     finally:
+        if current_worker_identity is not None:
+            registry.release_session(current_worker_identity["node_id"], conn)
         session_stop.set()
         try:
             conn.shutdown(socket.SHUT_RDWR)
@@ -832,6 +922,7 @@ class MasterTaskQueue:
             running_task_ids: list[str] = []
             failed_task_ids: list[str] = []
             completed_task_ids: list[str] = []
+            completed_by_worker: dict[str, int] = {}
             timeout_attempts = 0
             recovered_after_timeout = 0
             tasks_with_multiple_attempts = 0
@@ -854,6 +945,13 @@ class MasterTaskQueue:
                     completed_task_ids.append(task_id)
 
                 attempts = record.get("attempts", {}) if isinstance(record.get("attempts", {}), dict) else {}
+                if status == "completed":
+                    for attempt in attempts.values():
+                        if isinstance(attempt, dict) and attempt.get("status") == "completed":
+                            worker_id = attempt.get("worker_id")
+                            if isinstance(worker_id, str) and worker_id:
+                                completed_by_worker[worker_id] = completed_by_worker.get(worker_id, 0) + 1
+                            break
                 task_timeout_attempts = 0
                 for attempt in attempts.values():
                     if str(attempt.get("status", "")).lower() == "timed_out":
@@ -878,6 +976,7 @@ class MasterTaskQueue:
                 "running_task_ids": running_task_ids,
                 "failed_task_ids": failed_task_ids,
                 "completed_task_ids": completed_task_ids,
+                "completed_by_worker": completed_by_worker,
             }
 
     def get_task(self, task_id: str) -> Dict[str, object] | None:

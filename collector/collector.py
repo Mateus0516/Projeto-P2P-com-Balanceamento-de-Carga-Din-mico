@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 import argparse
 import csv
 import json
@@ -92,6 +92,7 @@ def export_reports(metrics: Dict[str, Any], output_dir: str | Path, *, timestamp
         "running_task_ids",
         "failed_task_ids",
         "completed_task_ids",
+        "completed_by_worker",
     ]
     csv_path = out_dir / f"metrics_{stamp}.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
