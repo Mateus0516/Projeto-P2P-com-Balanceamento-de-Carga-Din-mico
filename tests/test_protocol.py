@@ -11,6 +11,7 @@ import pytest
 from collector.collector import export_reports, request_metrics, run_cli
 from master.master import (
     MasterTaskQueue,
+    PeerLoanManager,
     build_ack_message,
     handle_client,
     load_or_create_config as load_master_config,
@@ -19,6 +20,17 @@ from master.master import (
 )
 from protocol import (
     MasterRegistry,
+    build_command_redirect_message,
+    build_command_release_message,
+    build_confirm_loan_message,
+    build_get_loan_status_message,
+    build_loan_committed_message,
+    build_loan_status_message,
+    build_notify_worker_returned_message,
+    build_request_help_message,
+    build_response_accepted_message,
+    build_response_rejected_message,
+    build_return_ack_message,
     build_heartbeat_ack_message,
     build_heartbeat_message,
     build_metrics_request_message,
@@ -107,6 +119,530 @@ def test_master_registry_tracks_two_workers_separately_and_keeps_same_identity_a
     registry.upsert_worker(worker_a)
     assert len(registry.workers) == 2
     assert set(registry.workers) == {worker_a["node_id"], worker_b["node_id"]}
+
+
+def test_peer_loan_messages_match_protocol_contract():
+    requester = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "master-a",
+        "node_role": "master",
+    }
+    target = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master-b",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+    loan_id = "44444444-4444-4444-8444-444444444444"
+
+    request_help = {
+        "version": "sd_2026_2_v1",
+        "type": "request_help",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000123,
+        "source": requester,
+        "destination": target,
+        "payload": {
+            "requester_master": requester,
+            "workers_needed": 2,
+            "tasks_pending": 8,
+        },
+    }
+    assert validate_message(request_help) is True
+
+    accepted = build_response_accepted_message(
+        request_help,
+        source=target,
+        destination=requester,
+        loan_id=loan_id,
+        requester_master=requester,
+        target_master=target,
+        home_master=requester,
+        worker=worker,
+        reservation_timeout_ms=15000,
+        assignment_epoch=3,
+        loan_state="offered",
+    )
+    assert validate_message(accepted) is True
+
+    committed = build_loan_committed_message(
+        accepted,
+        source=requester,
+        destination=target,
+        loan_id=loan_id,
+        requester_master=requester,
+        target_master=target,
+        home_master=requester,
+        worker=worker,
+        assignment_epoch=3,
+        reservation_timeout_ms=15000,
+        loan_state="committed",
+    )
+    assert validate_message(committed) is True
+
+    redirected = build_command_redirect_message(
+        committed,
+        source=requester,
+        destination=target,
+        loan_id=loan_id,
+        worker=worker,
+        target_host="127.0.0.1",
+        target_port=9102,
+        assignment_epoch=3,
+        reason="redirect to peer",
+    )
+    assert validate_message(redirected) is True
+
+    status = build_loan_status_message(
+        committed,
+        source=requester,
+        destination=target,
+        loan_id=loan_id,
+        requester_master=requester,
+        target_master=target,
+        home_master=requester,
+        worker=worker,
+        assignment_epoch=3,
+        loan_state="committed",
+    )
+    assert validate_message(status) is True
+
+    rejected = build_response_rejected_message(
+        request_help,
+        source=target,
+        destination=requester,
+        loan_id=loan_id,
+        reason={"code": "capacity_exceeded", "message": "No workers available"},
+    )
+    assert validate_message(rejected) is True
+
+
+def test_peer_loan_messages_reject_invalid_payloads_and_bad_states():
+    requester = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "master-a",
+        "node_role": "master",
+    }
+    target = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master-b",
+        "node_role": "master",
+    }
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-a",
+        "node_role": "worker",
+    }
+
+    invalid_state = {
+        "version": "sd_2026_2_v1",
+        "type": "loan_status",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000124,
+        "source": requester,
+        "destination": target,
+        "payload": {
+            "loan_id": "44444444-4444-4444-8444-444444444444",
+            "requester_master": requester,
+            "target_master": target,
+            "home_master": requester,
+            "worker": worker,
+            "assignment_epoch": 5,
+            "loan_state": "active",
+        },
+    }
+    assert validate_message(invalid_state) is False
+
+    invalid_uuid = {
+        "version": "sd_2026_2_v1",
+        "type": "response_accepted",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000125,
+        "source": requester,
+        "destination": target,
+        "payload": {
+            "loan_id": "not-a-uuid",
+            "requester_master": requester,
+            "target_master": target,
+            "home_master": requester,
+            "worker": worker,
+            "assignment_epoch": 1,
+            "reservation_timeout_ms": 15000,
+            "loan_state": "offered",
+        },
+    }
+    assert validate_message(invalid_uuid) is False
+
+    invalid_epoch = {
+        "version": "sd_2026_2_v1",
+        "type": "confirm_loan",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000126,
+        "source": requester,
+        "destination": target,
+        "payload": {
+            "loan_id": "44444444-4444-4444-8444-444444444444",
+            "requester_master": requester,
+            "target_master": target,
+            "home_master": requester,
+            "worker": worker,
+            "assignment_epoch": -1,
+            "reservation_timeout_ms": 15000,
+            "loan_state": "committed",
+        },
+    }
+    assert validate_message(invalid_epoch) is False
+
+    invalid_target_master = {
+        "version": "sd_2026_2_v1",
+        "type": "request_help",
+        "message_id": str(uuid.uuid4()),
+        "request_id": str(uuid.uuid4()),
+        "timestamp_ms": 1727170000127,
+        "source": requester,
+        "destination": worker,
+        "payload": {
+            "requester_master": requester,
+            "workers_needed": 1,
+            "tasks_pending": 4,
+        },
+    }
+    assert validate_message(invalid_target_master) is False
+
+
+def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it():
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "44444444-4444-4444-8444-444444444444",
+        "node_label": "master-a",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9001,
+        "saturation_threshold": 3,
+        "release_threshold": 1,
+        "stable_samples": 1,
+        "monitor_interval_ms": 1000,
+    }
+    registry = MasterRegistry()
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "55555555-5555-4555-8555-555555555555",
+        "node_label": "worker-r1",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9105,
+        "status": "available",
+    }
+    registry.upsert_worker(worker)
+    manager = PeerLoanManager(registry, master_identity=master_identity)
+
+    request = {
+        "requester_master": master_identity,
+        "workers_needed": 1,
+        "tasks_pending": 2,
+    }
+    decision = manager.process_request_help(request, source={
+        "group_label": "p2p-cluster",
+        "node_id": "66666666-6666-4666-8666-666666666666",
+        "node_label": "master-b",
+        "node_role": "master",
+    })
+
+    assert decision["status"] == "accepted"
+    assert decision["loan_state"] == "offered"
+    assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "offered"
+
+    committed = manager.confirm_loan(decision["loan_id"], requester_master=request["requester_master"], request_id=str(uuid.uuid4()))
+    assert committed["loan_state"] == "committed"
+    assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "committed"
+
+
+def test_peer_loan_manager_redirects_only_committed_loan_to_valid_peer_master(tmp_path):
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "master-c",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9002,
+        "min_home_workers": 0,
+        "saturation_threshold": 3,
+        "release_threshold": 1,
+        "stable_samples": 1,
+        "monitor_interval_ms": 1000,
+    }
+    peer_master = {
+        "group_label": "p2p-cluster",
+        "node_id": "88888888-8888-4888-8888-888888888888",
+        "node_label": "master-d",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9003,
+    }
+    registry = MasterRegistry()
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "55555555-5555-4555-8555-555555555555",
+        "node_label": "worker-r1",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9105,
+        "status": "available",
+    }
+    registry.upsert_worker(worker)
+    manager = PeerLoanManager(registry, master_identity=master_identity, ledger_path=tmp_path / "loan_ledger.json")
+
+    decision = manager.process_request_help({
+        "requester_master": peer_master,
+        "workers_needed": 1,
+        "tasks_pending": 1,
+    }, source={
+        "group_label": "p2p-cluster",
+        "node_id": "66666666-6666-4666-8666-666666666666",
+        "node_label": "master-b",
+        "node_role": "master",
+    })
+    assert decision["status"] == "accepted"
+
+    committed = manager.confirm_loan(decision["loan_id"], requester_master=peer_master, request_id=str(uuid.uuid4()))
+    assert committed["status"] == "accepted"
+
+    socket_stub = object()
+    registry.active_sessions[worker["node_id"]] = socket_stub
+
+    redirect = manager.issue_redirect_command(decision["loan_id"], target_master=peer_master, reason="redirect to peer")
+    assert redirect["status"] == "accepted"
+    assert redirect["message"]["type"] == "command_redirect"
+    assert redirect["message"]["destination"]["node_id"] == peer_master["node_id"]
+    assert redirect["message"]["payload"]["loan_id"] == decision["loan_id"]
+    assert redirect["message"]["payload"]["home_master"]["node_id"] == master_identity["node_id"]
+
+
+def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_path):
+    home_master = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "master-a",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9101,
+    }
+    target_master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master-b",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 0,
+    }
+    worker_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "33333333-3333-4333-8333-333333333333",
+        "node_label": "worker-redirect",
+        "node_role": "worker",
+    }
+    config = load_worker_config(tmp_path / "worker-redirect.json")
+    config["group_label"] = "p2p-cluster"
+    config["node_label"] = "worker-redirect"
+    config["master"] = home_master
+    config["assignment_epoch"] = 7
+    config["loan_id"] = "44444444-4444-4444-8444-444444444444"
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    target_master["port"] = server.getsockname()[1]
+    seen = {}
+
+    def accept_registration():
+        conn, _ = server.accept()
+        try:
+            buffer = bytearray()
+            messages = recv_msgs(conn, buffer)
+            assert messages and messages[0]["type"] == "register_worker"
+            seen["destination_id"] = messages[0]["destination"]["node_id"]
+            seen["accepted"] = True
+            ack = {
+                "version": "sd_2026_2_v1",
+                "type": "registration_ack",
+                "message_id": str(uuid.uuid4()),
+                "request_id": messages[0]["request_id"],
+                "timestamp_ms": int(time.time() * 1000),
+                "source": target_master,
+                "destination": worker_identity,
+                "payload": {"accepted": True, "reason": None, "assignment_epoch": 7},
+            }
+            send_msg(conn, ack)
+        finally:
+            conn.close()
+            server.close()
+
+    threading.Thread(target=accept_registration, daemon=True).start()
+
+    manager = WorkerSessionManager(home_master["host"], home_master["port"], config, stop_event=threading.Event())
+    redirect = build_command_redirect_message(
+        {"request_id": str(uuid.uuid4()), "source": home_master, "destination": target_master},
+        source=home_master,
+        destination=target_master,
+        loan_id=config["loan_id"],
+        worker=worker_identity,
+        target_host=target_master["host"],
+        target_port=target_master["port"],
+        assignment_epoch=7,
+        reason="redirect to peer",
+        target_master=target_master,
+        home_master=home_master,
+        home=home_master,
+        request_id=str(uuid.uuid4()),
+    )
+
+    assert manager.process_inbound_message(redirect) is True
+    assert manager.master_host == target_master["host"]
+    assert manager.master_port == target_master["port"]
+    assert seen["destination_id"] == target_master["node_id"]
+    assert seen["accepted"] is True
+
+
+def test_peer_loan_manager_processes_worker_return_and_closes_loan():
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "master-c",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9002,
+    }
+    registry = MasterRegistry()
+    worker = {
+        "group_label": "p2p-cluster",
+        "node_id": "55555555-5555-4555-8555-555555555555",
+        "node_label": "worker-r1",
+        "node_role": "worker",
+        "host": "127.0.0.1",
+        "port": 9105,
+        "status": "available",
+    }
+    registry.upsert_worker(worker)
+    manager = PeerLoanManager(registry, master_identity=master_identity)
+
+    requester_master = {**master_identity, "port": 9005}
+    decision = manager.process_request_help({"requester_master": requester_master, "workers_needed": 1, "tasks_pending": 1}, source={"group_label": "p2p-cluster", "node_id": "66666666-6666-4666-8666-666666666666", "node_label": "master-b", "node_role": "master"})
+    assert decision["status"] == "accepted"
+    assert decision["requester_master"]["node_id"] == requester_master["node_id"]
+
+    committed = manager.confirm_loan(decision["loan_id"], requester_master=decision["requester_master"], request_id=str(uuid.uuid4()))
+    assert committed["status"] == "accepted"
+    assert committed["requester_master"]["node_id"] == requester_master["node_id"]
+
+    notify = manager.process_notify_worker_returned(decision["loan_id"], worker=worker, assignment_epoch=0)
+    assert notify["status"] == "accepted"
+    assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "closed"
+
+    ack = manager.process_return_ack(decision["loan_id"], worker=worker, assignment_epoch=0, status="returned")
+    assert ack["status"] == "accepted"
+    assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "closed"
+
+
+def test_worker_manager_processes_command_release_and_returns_to_home_master(tmp_path):
+    home_master = {
+        "group_label": "p2p-cluster",
+        "node_id": "11111111-1111-4111-8111-111111111111",
+        "node_label": "master-a",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9001,
+    }
+    target_master = {
+        "group_label": "p2p-cluster",
+        "node_id": "22222222-2222-4222-8222-222222222222",
+        "node_label": "master-b",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9002,
+    }
+    config = load_worker_config(tmp_path / "worker-return.json")
+    config["group_label"] = "p2p-cluster"
+    config["node_label"] = "worker-return"
+    config["home_master"] = home_master
+    config["master"] = target_master
+    config["assignment_epoch"] = 3
+    config["loan_id"] = "44444444-4444-4444-8444-444444444444"
+
+    manager = WorkerSessionManager(target_master["host"], target_master["port"], config, stop_event=threading.Event())
+    command = build_command_release_message(
+        {"request_id": str(uuid.uuid4())},
+        source=target_master,
+        destination={
+            "group_label": config["group_label"],
+            "node_id": config["node_id"],
+            "node_label": config["node_label"],
+            "node_role": "worker",
+        },
+        loan_id=config["loan_id"],
+        assignment_epoch=3,
+        reason="return to home",
+        request_id=str(uuid.uuid4()),
+    )
+
+    assert manager.process_inbound_message(command) is True
+    assert manager.master_host == home_master["host"]
+    assert manager.master_port == home_master["port"]
+    assert config["home_master"]["node_id"] == home_master["node_id"]
+
+
+def test_peer_loan_manager_rejects_when_local_capacity_is_too_low():
+    master_identity = {
+        "group_label": "p2p-cluster",
+        "node_id": "77777777-7777-4777-8777-777777777777",
+        "node_label": "master-c",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9002,
+        "saturation_threshold": 3,
+        "release_threshold": 1,
+        "stable_samples": 1,
+        "monitor_interval_ms": 1000,
+    }
+    registry = MasterRegistry()
+    for idx in range(1, 3):
+        registry.upsert_worker({
+            "group_label": "p2p-cluster",
+            "node_id": f"{idx:02d}000000-0000-4000-8000-000000000000",
+            "node_label": f"worker-{idx}",
+            "node_role": "worker",
+            "host": "127.0.0.1",
+            "port": 9100 + idx,
+            "status": "available",
+        })
+    manager = PeerLoanManager(registry, master_identity=master_identity)
+    decision = manager.process_request_help({
+        "requester_master": master_identity,
+        "workers_needed": 1,
+        "tasks_pending": 5,
+    }, source={
+        "group_label": "p2p-cluster",
+        "node_id": "88888888-8888-4888-8888-888888888888",
+        "node_label": "master-d",
+        "node_role": "master",
+    })
+
+    assert decision["status"] == "rejected"
+    assert decision["reason"]["code"] in {"high_load", "min_home_workers", "no_workers_available"}
 
 
 def test_valid_task_submit_message_is_accepted_by_protocol():

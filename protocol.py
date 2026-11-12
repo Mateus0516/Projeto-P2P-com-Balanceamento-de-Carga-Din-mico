@@ -390,6 +390,298 @@ def validate_task_ack_payload(payload: Any) -> bool:
     return True
 
 
+VALID_LOAN_STATES = {"offered", "committed", "closed", "cancelled", "expired", "unknown"}
+
+
+def _validate_loan_id(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return parsed.version == 4
+
+
+def _validate_master_identity(node: Any) -> bool:
+    if not _validate_node_identity(node):
+        return False
+    return isinstance(node.get("node_role"), str) and node.get("node_role") == "master"
+
+
+def _validate_worker_identity(node: Any) -> bool:
+    if not _validate_node_identity(node):
+        return False
+    return isinstance(node.get("node_role"), str) and node.get("node_role") == "worker"
+
+
+def _validate_loan_state(value: Any) -> bool:
+    return isinstance(value, str) and value in VALID_LOAN_STATES
+
+
+def validate_request_help_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("requester_master", "workers_needed", "tasks_pending")
+    if any(field not in payload for field in required_fields):
+        return False
+
+    requester_master = payload.get("requester_master")
+    if not _validate_master_identity(requester_master):
+        return False
+
+    workers_needed = payload.get("workers_needed")
+    if not isinstance(workers_needed, int) or isinstance(workers_needed, bool) or workers_needed < 1:
+        return False
+
+    tasks_pending = payload.get("tasks_pending")
+    if not isinstance(tasks_pending, int) or isinstance(tasks_pending, bool) or tasks_pending < 0:
+        return False
+
+    return True
+
+
+def validate_response_accepted_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = (
+        "loan_id",
+        "requester_master",
+        "target_master",
+        "home_master",
+        "worker",
+        "assignment_epoch",
+        "reservation_timeout_ms",
+        "loan_state",
+    )
+    if any(field not in payload for field in required_fields):
+        return False
+
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not _validate_master_identity(payload.get("requester_master")):
+        return False
+    if not _validate_master_identity(payload.get("target_master")):
+        return False
+    if not _validate_master_identity(payload.get("home_master")):
+        return False
+    if not _validate_worker_identity(payload.get("worker")):
+        return False
+
+    assignment_epoch = payload.get("assignment_epoch")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        return False
+
+    reservation_timeout_ms = payload.get("reservation_timeout_ms")
+    if not isinstance(reservation_timeout_ms, int) or isinstance(reservation_timeout_ms, bool) or reservation_timeout_ms != 15000:
+        return False
+
+    if not _validate_loan_state(payload.get("loan_state")):
+        return False
+    return True
+
+
+def validate_response_rejected_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "reason")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+
+    reason = payload.get("reason")
+    if not isinstance(reason, dict):
+        return False
+    if not isinstance(reason.get("code"), str) or not reason["code"].strip():
+        return False
+    if not isinstance(reason.get("message"), str) or not reason["message"].strip():
+        return False
+    return True
+
+
+def validate_confirm_loan_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    if not validate_response_accepted_payload(payload):
+        return False
+    if payload.get("loan_state") not in {"offered", "committed"}:
+        return False
+    return True
+
+
+def validate_loan_committed_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if not validate_response_accepted_payload(payload):
+        return False
+    if payload.get("loan_state") != "committed":
+        return False
+    return True
+
+
+def validate_command_redirect_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "worker", "assignment_epoch", "reason")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not _validate_worker_identity(payload.get("worker")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    if not isinstance(payload.get("reason"), str) or not payload.get("reason").strip():
+        return False
+
+    home = payload.get("home")
+    if home is not None and not _validate_master_identity(home):
+        return False
+    home_master = payload.get("home_master")
+    if home_master is not None and not _validate_master_identity(home_master):
+        return False
+    target_master = payload.get("target_master")
+    if target_master is not None and not _validate_master_identity(target_master):
+        return False
+
+    target_host = payload.get("target_host")
+    target_port = payload.get("target_port")
+    if target_host is not None and (not isinstance(target_host, str) or not target_host.strip()):
+        return False
+    if target_port is not None and (not isinstance(target_port, int) or isinstance(target_port, bool) or not (1 <= target_port <= 65535)):
+        return False
+    return True
+
+
+def validate_register_temporary_worker_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if not validate_response_accepted_payload(payload):
+        return False
+    return True
+
+
+def validate_command_release_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "assignment_epoch", "reason")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    if not isinstance(payload.get("reason"), str) or not payload.get("reason").strip():
+        return False
+    return True
+
+
+def validate_notify_worker_returned_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "worker", "assignment_epoch")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not _validate_worker_identity(payload.get("worker")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    return True
+
+
+def validate_return_ack_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "worker", "assignment_epoch", "status")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not _validate_worker_identity(payload.get("worker")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    if payload.get("status") not in {"returned", "accepted", "rejected"}:
+        return False
+    return True
+
+
+def validate_get_loan_status_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if "loan_id" not in payload:
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if "requester_master" in payload and not _validate_master_identity(payload.get("requester_master")):
+        return False
+    if "target_master" in payload and not _validate_master_identity(payload.get("target_master")):
+        return False
+    return True
+
+
+def validate_loan_status_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = (
+        "loan_id",
+        "requester_master",
+        "target_master",
+        "home_master",
+        "worker",
+        "assignment_epoch",
+        "loan_state",
+    )
+    if any(field not in payload for field in required_fields):
+        return False
+
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not _validate_master_identity(payload.get("requester_master")):
+        return False
+    if not _validate_master_identity(payload.get("target_master")):
+        return False
+    if not _validate_master_identity(payload.get("home_master")):
+        return False
+    if not _validate_worker_identity(payload.get("worker")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    if not _validate_loan_state(payload.get("loan_state")):
+        return False
+    return True
+
+
+def validate_cancel_loan_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    required_fields = ("loan_id", "assignment_epoch", "reason", "loan_state")
+    if any(field not in payload for field in required_fields):
+        return False
+    if not _validate_loan_id(payload.get("loan_id")):
+        return False
+    if not isinstance(payload.get("assignment_epoch"), int) or isinstance(payload.get("assignment_epoch"), bool) or payload.get("assignment_epoch") < 0:
+        return False
+    if not isinstance(payload.get("reason"), str) or not payload.get("reason").strip():
+        return False
+    if payload.get("loan_state") != "offered":
+        return False
+    return True
+
+
 def validate_message(message: Any) -> bool:
     if not isinstance(message, dict):
         return False
@@ -406,7 +698,7 @@ def validate_message(message: Any) -> bool:
     if message["version"] != "sd_2026_2_v1":
         return False
 
-    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report"}:
+    if message.get("type") not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report", "request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "command_redirect", "register_temporary_worker", "command_release", "notify_worker_returned", "return_ack", "get_loan_status", "loan_status", "cancel_loan"}:
         return False
 
     for field in ("type", "message_id", "request_id"):
@@ -430,6 +722,18 @@ def validate_message(message: Any) -> bool:
         return False
     if not _validate_node_identity(message["destination"]):
         return False
+
+    if message["type"] in {"request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "command_redirect", "register_temporary_worker", "get_loan_status", "loan_status", "cancel_loan"}:
+        if message["source"].get("node_role") != "master":
+            return False
+        if message["destination"].get("node_role") != "master":
+            return False
+
+    if message["type"] in {"command_release", "notify_worker_returned", "return_ack"}:
+        if message["source"].get("node_role") not in {"master", "worker"}:
+            return False
+        if message["destination"].get("node_role") not in {"master", "worker"}:
+            return False
 
     payload = message["payload"]
     if payload is None:
@@ -527,7 +831,513 @@ def validate_message(message: Any) -> bool:
         if not validate_metrics_response_payload(payload):
             return False
 
+    if message["type"] == "request_help":
+        if not validate_request_help_payload(payload):
+            return False
+
+    if message["type"] == "response_accepted":
+        if not validate_response_accepted_payload(payload):
+            return False
+
+    if message["type"] == "response_rejected":
+        if not validate_response_rejected_payload(payload):
+            return False
+
+    if message["type"] == "confirm_loan":
+        if not validate_confirm_loan_payload(payload):
+            return False
+
+    if message["type"] == "loan_committed":
+        if not validate_loan_committed_payload(payload):
+            return False
+
+    if message["type"] == "command_redirect":
+        if not validate_command_redirect_payload(payload):
+            return False
+
+    if message["type"] == "register_temporary_worker":
+        if not validate_register_temporary_worker_payload(payload):
+            return False
+
+    if message["type"] == "command_release":
+        if not validate_command_release_payload(payload):
+            return False
+
+    if message["type"] == "notify_worker_returned":
+        if not validate_notify_worker_returned_payload(payload):
+            return False
+
+    if message["type"] == "return_ack":
+        if not validate_return_ack_payload(payload):
+            return False
+
+    if message["type"] == "get_loan_status":
+        if not validate_get_loan_status_payload(payload):
+            return False
+
+    if message["type"] == "loan_status":
+        if not validate_loan_status_payload(payload):
+            return False
+
+    if message["type"] == "cancel_loan":
+        if not validate_cancel_loan_payload(payload):
+            return False
+
     return True
+
+
+def build_request_help_message(source: dict, destination: dict, *, requester_master: dict, workers_needed: int, tasks_pending: int, request_id: str | None = None) -> dict:
+    if not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if not isinstance(workers_needed, int) or isinstance(workers_needed, bool) or workers_needed < 1:
+        raise ValueError("workers_needed must be a positive integer")
+    if not isinstance(tasks_pending, int) or isinstance(tasks_pending, bool) or tasks_pending < 0:
+        raise ValueError("tasks_pending must be a non-negative integer")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "request_help",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "requester_master": dict(requester_master),
+            "workers_needed": int(workers_needed),
+            "tasks_pending": int(tasks_pending),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("request_help message is invalid")
+    return message
+
+
+def build_response_accepted_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, requester_master: dict, target_master: dict, home_master: dict, worker: dict, assignment_epoch: int, reservation_timeout_ms: int = 15000, loan_state: str = "offered", request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+    if not _validate_master_identity(home_master):
+        raise ValueError("home_master must be a valid master identity")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reservation_timeout_ms, int) or isinstance(reservation_timeout_ms, bool) or reservation_timeout_ms != 15000:
+        raise ValueError("reservation_timeout_ms must be 15000")
+    if not _validate_loan_state(loan_state):
+        raise ValueError("loan_state is invalid")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "response_accepted",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "requester_master": dict(requester_master),
+            "target_master": dict(target_master),
+            "home_master": dict(home_master),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+            "reservation_timeout_ms": int(reservation_timeout_ms),
+            "loan_state": str(loan_state),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("response_accepted message is invalid")
+    return message
+
+
+def build_response_rejected_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, reason: dict, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not isinstance(reason, dict):
+        raise ValueError("reason must be a dict")
+    if not isinstance(reason.get("code"), str) or not reason["code"].strip():
+        raise ValueError("reason[code] is required")
+    if not isinstance(reason.get("message"), str) or not reason["message"].strip():
+        raise ValueError("reason[message] is required")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "response_rejected",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "reason": {"code": str(reason["code"]), "message": str(reason["message"])},
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("response_rejected message is invalid")
+    return message
+
+
+def build_confirm_loan_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, requester_master: dict, target_master: dict, home_master: dict, worker: dict, assignment_epoch: int, reservation_timeout_ms: int = 15000, loan_state: str = "committed", request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+    if not _validate_master_identity(home_master):
+        raise ValueError("home_master must be a valid master identity")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reservation_timeout_ms, int) or isinstance(reservation_timeout_ms, bool) or reservation_timeout_ms != 15000:
+        raise ValueError("reservation_timeout_ms must be 15000")
+    if loan_state not in {"offered", "committed"}:
+        raise ValueError("loan_state must be offered or committed")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "confirm_loan",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "requester_master": dict(requester_master),
+            "target_master": dict(target_master),
+            "home_master": dict(home_master),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+            "reservation_timeout_ms": int(reservation_timeout_ms),
+            "loan_state": str(loan_state),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("confirm_loan message is invalid")
+    return message
+
+
+def build_loan_committed_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, requester_master: dict, target_master: dict, home_master: dict, worker: dict, assignment_epoch: int, reservation_timeout_ms: int = 15000, loan_state: str = "committed", request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+    if not _validate_master_identity(home_master):
+        raise ValueError("home_master must be a valid master identity")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reservation_timeout_ms, int) or isinstance(reservation_timeout_ms, bool) or reservation_timeout_ms != 15000:
+        raise ValueError("reservation_timeout_ms must be 15000")
+    if loan_state != "committed":
+        raise ValueError("loan_state must be committed")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "loan_committed",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "requester_master": dict(requester_master),
+            "target_master": dict(target_master),
+            "home_master": dict(home_master),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+            "reservation_timeout_ms": int(reservation_timeout_ms),
+            "loan_state": str(loan_state),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("loan_committed message is invalid")
+    return message
+
+
+def build_command_redirect_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, worker: dict, target_host: str, target_port: int, assignment_epoch: int, reason: str, target_master: dict | None = None, home_master: dict | None = None, home: dict | None = None, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(target_host, str) or not target_host.strip():
+        raise ValueError("target_host is required")
+    if not isinstance(target_port, int) or isinstance(target_port, bool) or not (1 <= target_port <= 65535):
+        raise ValueError("target_port must be an integer between 1 and 65535")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("reason is required")
+    if target_master is not None and not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+    if home_master is not None and not _validate_master_identity(home_master):
+        raise ValueError("home_master must be a valid master identity")
+    if home is not None and not _validate_master_identity(home):
+        raise ValueError("home must be a valid master identity")
+
+    resolved_home = dict(home_master or home or source)
+    resolved_target = dict(target_master or destination if isinstance(destination, dict) and destination.get("node_role") == "master" else source)
+    payload = {
+        "loan_id": str(loan_id),
+        "worker": dict(worker),
+        "assignment_epoch": int(assignment_epoch),
+        "reason": str(reason),
+        "target_host": str(target_host),
+        "target_port": int(target_port),
+        "home": dict(resolved_home),
+        "home_master": dict(resolved_home),
+        "target_master": dict(resolved_target),
+    }
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "command_redirect",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": payload,
+    }
+    if not validate_message(message):
+        raise ValueError("command_redirect message is invalid")
+    return message
+
+
+def build_register_temporary_worker_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, requester_master: dict, target_master: dict, home_master: dict, worker: dict, assignment_epoch: int, reservation_timeout_ms: int = 15000, loan_state: str = "offered", request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    # same validation profile as the accepted response, but this message is used for worker registration handoff.
+    message = build_response_accepted_message(
+        request_message,
+        source=source,
+        destination=destination,
+        loan_id=loan_id,
+        requester_master=requester_master,
+        target_master=target_master,
+        home_master=home_master,
+        worker=worker,
+        assignment_epoch=assignment_epoch,
+        reservation_timeout_ms=reservation_timeout_ms,
+        loan_state=loan_state,
+        request_id=request_id,
+    )
+    message["type"] = "register_temporary_worker"
+    if not validate_message(message):
+        raise ValueError("register_temporary_worker message is invalid")
+    return message
+
+
+def build_command_release_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, assignment_epoch: int, reason: str, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("reason is required")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "command_release",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "assignment_epoch": int(assignment_epoch),
+            "reason": str(reason),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("command_release message is invalid")
+    return message
+
+
+def build_notify_worker_returned_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, worker: dict, assignment_epoch: int, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "notify_worker_returned",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("notify_worker_returned message is invalid")
+    return message
+
+
+def build_return_ack_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, worker: dict, assignment_epoch: int, status: str, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if status not in {"returned", "accepted", "rejected"}:
+        raise ValueError("status must be returned, accepted or rejected")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "return_ack",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+            "status": str(status),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("return_ack message is invalid")
+    return message
+
+
+def build_get_loan_status_message(source: dict, destination: dict, *, loan_id: str, requester_master: dict | None = None, target_master: dict | None = None, request_id: str | None = None) -> dict:
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if requester_master is not None and not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if target_master is not None and not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+
+    payload = {"loan_id": str(loan_id)}
+    if requester_master is not None:
+        payload["requester_master"] = dict(requester_master)
+    if target_master is not None:
+        payload["target_master"] = dict(target_master)
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "get_loan_status",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": payload,
+    }
+    if not validate_message(message):
+        raise ValueError("get_loan_status message is invalid")
+    return message
+
+
+def build_loan_status_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, requester_master: dict, target_master: dict, home_master: dict, worker: dict, assignment_epoch: int, loan_state: str, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not _validate_master_identity(requester_master):
+        raise ValueError("requester_master must be a valid master identity")
+    if not _validate_master_identity(target_master):
+        raise ValueError("target_master must be a valid master identity")
+    if not _validate_master_identity(home_master):
+        raise ValueError("home_master must be a valid master identity")
+    if not _validate_worker_identity(worker):
+        raise ValueError("worker must be a valid worker identity")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not _validate_loan_state(loan_state):
+        raise ValueError("loan_state is invalid")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "loan_status",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "requester_master": dict(requester_master),
+            "target_master": dict(target_master),
+            "home_master": dict(home_master),
+            "worker": dict(worker),
+            "assignment_epoch": int(assignment_epoch),
+            "loan_state": str(loan_state),
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("loan_status message is invalid")
+    return message
+
+
+def build_cancel_loan_message(request_message: dict, source: dict, destination: dict, *, loan_id: str, assignment_epoch: int, reason: str, request_id: str | None = None) -> dict:
+    if not isinstance(request_message, dict):
+        raise ValueError("request_message must be a dict")
+    if not _validate_loan_id(loan_id):
+        raise ValueError("loan_id must be a valid UUIDv4")
+    if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+        raise ValueError("assignment_epoch must be a non-negative integer")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("reason is required")
+
+    message = {
+        "version": "sd_2026_2_v1",
+        "type": "cancel_loan",
+        "message_id": str(uuid.uuid4()),
+        "request_id": request_id or str(request_message.get("request_id") or uuid.uuid4()),
+        "timestamp_ms": int(time.time() * 1000),
+        "source": dict(source),
+        "destination": dict(destination),
+        "payload": {
+            "loan_id": str(loan_id),
+            "assignment_epoch": int(assignment_epoch),
+            "reason": str(reason),
+            "loan_state": "offered",
+        },
+    }
+    if not validate_message(message):
+        raise ValueError("cancel_loan message is invalid")
+    return message
 
 
 def build_task_submit_message(source: dict, destination: dict, task: dict, request_id: str | None = None) -> dict:
@@ -871,7 +1681,7 @@ def classify_protocol_error(message: dict) -> str:
         return "invalid field capitalization: use 'version' instead of 'Version'"
 
     if "type" in message and isinstance(message["type"], str):
-        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report"}:
+        if message["type"] not in {"register_worker", "registration_ack", "heartbeat", "heartbeat_ack", "protocol_error", "task_submit", "task_submit_ack", "task_request", "task_assignment", "no_task", "task_result", "task_ack", "metrics_request", "metrics_response", "performance_report", "request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "command_redirect", "register_temporary_worker", "command_release", "notify_worker_returned", "return_ack", "get_loan_status", "loan_status", "cancel_loan"}:
             return f"unknown message type: {message['type']}"
 
     if "version" in message and isinstance(message["version"], str):

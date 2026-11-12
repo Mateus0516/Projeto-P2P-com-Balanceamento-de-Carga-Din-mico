@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 pytest.out
 reports/
+
+master/loan_ledger.json
+sprint3_release_return_notebook.ipynb
+worker/config-b.json

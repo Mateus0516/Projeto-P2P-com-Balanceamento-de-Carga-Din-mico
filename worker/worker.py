@@ -15,8 +15,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from protocol import (
+    build_command_release_message,
     build_heartbeat_ack_message,
     build_heartbeat_message,
+    build_notify_worker_returned_message,
     build_task_request_message,
     build_task_result_message,
     log_event,
@@ -520,6 +522,120 @@ class WorkerSessionManager:
             self._clear_task_request_pending()
 
         msg_type = message.get("type")
+        if msg_type == "command_redirect":
+            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+            target_master = payload.get("target_master")
+            target_host = str(payload.get("target_host") or self.master_host)
+            target_port = int(payload.get("target_port") or self.master_port)
+            current_master = dict(self.config.get("master") or {}) if isinstance(self.config.get("master"), dict) else {}
+            home_master = dict(self.config.get("home_master") or current_master or {}) if isinstance(self.config.get("home_master"), dict) else (dict(current_master) if current_master else {})
+            if isinstance(target_master, dict) and target_master.get("node_role") == "master":
+                self.config["home_master"] = dict(home_master or current_master or target_master)
+                self.config["master"] = {
+                    "group_label": str(target_master.get("group_label") or self.config.get("group_label", "p2p-cluster")),
+                    "node_id": str(target_master.get("node_id") or target_master.get("uuid") or "00000000-0000-4000-8000-000000000000"),
+                    "node_label": str(target_master.get("node_label") or "master"),
+                    "node_role": str(target_master.get("node_role") or "master"),
+                    "host": str(target_master.get("host") or target_host),
+                    "port": int(target_master.get("port") or target_port),
+                }
+            else:
+                if home_master:
+                    self.config["home_master"] = dict(home_master)
+                else:
+                    self.config["home_master"] = dict(current_master)
+                self.config["master"] = {
+                    "group_label": str(self.config.get("group_label", "p2p-cluster")),
+                    "node_id": str(self.config.get("master", {}).get("node_id") or "00000000-0000-4000-8000-000000000000"),
+                    "node_label": str(self.config.get("master", {}).get("node_label") or "master"),
+                    "node_role": "master",
+                    "host": target_host,
+                    "port": target_port,
+                }
+
+            self.master_host = target_host
+            self.master_port = target_port
+            self.config["assignment_epoch"] = int(payload.get("assignment_epoch", self.config.get("assignment_epoch", 0)))
+            self.config["loan_id"] = payload.get("loan_id")
+
+            session = open_control_session(self.master_host, self.master_port, timeout=1.0)
+            accepted = register_worker(self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event)
+            if not accepted:
+                session.close()
+                return False
+
+            self._set_session(session)
+            self._start_heartbeat_for_session(session)
+            self.retransmit_pending_results(session)
+            self.start_task_polling_loop(session)
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "command_redirect", message.get("request_id", "unknown"), "accepted")
+            return True
+
+        if msg_type == "command_release":
+            payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+            if not isinstance(payload, dict):
+                return False
+
+            current_master = dict(self.config.get("master") or {}) if isinstance(self.config.get("master"), dict) else {}
+            home_master = self.config.get("home_master")
+            if not isinstance(home_master, dict):
+                home_master = dict(current_master)
+            if not home_master:
+                return False
+
+            if str(payload.get("loan_id", "")) != str(self.config.get("loan_id") or ""):
+                return False
+            if int(payload.get("assignment_epoch", 0)) != int(self.config.get("assignment_epoch", 0)):
+                return False
+            if str(message.get("source", {}).get("node_id", "")) != str(current_master.get("node_id", "")):
+                return False
+
+            self.busy = True
+            self.task_request_pending = False
+            self.current_task = None
+            self.config["home_master"] = dict(home_master)
+            self.config["master"] = dict(home_master)
+            self.master_host = str(home_master.get("host") or self.master_host)
+            self.master_port = int(home_master.get("port") or self.master_port)
+
+            try:
+                session = open_control_session(self.master_host, self.master_port, timeout=1.0)
+                accepted = register_worker(self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event)
+                if accepted:
+                    self._set_session(session)
+                    self._start_heartbeat_for_session(session)
+                    self.start_task_polling_loop(session)
+            except OSError:
+                session = None
+
+            worker_identity = {
+                "group_label": str(self.config.get("group_label", "p2p-cluster")),
+                "node_id": str(self.config.get("node_id", self.config.get("uuid", str(uuid.uuid4())))),
+                "node_label": str(self.config.get("node_label", self.config.get("label", "worker-a"))),
+                "node_role": str(self.config.get("node_role", "worker")),
+            }
+            notify = build_notify_worker_returned_message(
+                {"request_id": str(uuid.uuid4())},
+                source=worker_identity,
+                destination={
+                    "group_label": str(home_master.get("group_label", "p2p-cluster")),
+                    "node_id": str(home_master.get("node_id", "00000000-0000-4000-8000-000000000000")),
+                    "node_label": str(home_master.get("node_label", "master")),
+                    "node_role": str(home_master.get("node_role", "master")),
+                },
+                loan_id=str(payload.get("loan_id")),
+                worker=worker_identity,
+                assignment_epoch=int(payload.get("assignment_epoch", 0)),
+            )
+            if session is not None:
+                try:
+                    session.send_message(notify)
+                except Exception:
+                    pass
+            log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "command_release", message.get("request_id", "unknown"), "returned")
+            return True
+
+        msg_type = message.get("type")
         if msg_type == "task_assignment":
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
             if not payload:
@@ -770,6 +886,20 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
     loan_id = None if config.get("loan_id") is None else _coerce_loan_id(config.get("loan_id"), node_id, node_label)
     config["assignment_epoch"] = assignment_epoch
     config["loan_id"] = loan_id
+    home_master = config.get("home_master") if isinstance(config.get("home_master"), dict) else None
+    if home_master is None:
+        home_master = dict(config.get("master") or {}) if isinstance(config.get("master"), dict) else {}
+    if not home_master:
+        home_master = dict(master_identity)
+    config["home_master"] = dict(home_master)
+    home_master_identity = {
+        "group_label": str(home_master.get("group_label", master_identity.get("group_label", "p2p-cluster"))),
+        "node_id": str(home_master.get("node_id", master_identity.get("node_id", "00000000-0000-4000-8000-000000000000"))),
+        "node_label": str(home_master.get("node_label", master_identity.get("node_label", "master"))),
+        "node_role": str(home_master.get("node_role", master_identity.get("node_role", "master"))),
+        "host": str(home_master.get("host", master_identity.get("host", "127.0.0.1"))),
+        "port": int(home_master.get("port", master_identity.get("port", 9000))),
+    }
     message = {
         "version": "sd_2026_2_v1",
         "type": "register_worker",
@@ -789,14 +919,7 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
             "node_role": str(master_identity.get("node_role", "master")),
         },
         "payload": {
-            "home_master": {
-                "group_label": str(master_identity.get("group_label", "p2p-cluster")),
-                "node_id": str(master_identity.get("node_id", "00000000-0000-4000-8000-000000000000")),
-                "node_label": str(master_identity.get("node_label", "master")),
-                "node_role": str(master_identity.get("node_role", "master")),
-                "host": str(master_identity.get("host", "127.0.0.1")),
-                "port": int(master_identity.get("port", 9000)),
-            },
+            "home_master": home_master_identity,
             "assignment_epoch": assignment_epoch,
             "loan_id": loan_id,
             "host": str(config.get("host", "127.0.0.1")),
