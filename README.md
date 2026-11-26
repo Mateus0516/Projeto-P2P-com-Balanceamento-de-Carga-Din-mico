@@ -291,3 +291,94 @@ Também foi validada a geração periódica de relatórios em intervalos de apro
 A Sprint 2 implementou o fluxo de submissão, distribuição, execução e acompanhamento de tarefas, com mecanismos de recuperação de falhas, monitoramento de carga e coleta de métricas.
 
 A integração entre diferentes Masters e a negociação de recursos ficam reservadas para as próximas etapas do projeto.
+
+
+## Sprint 3 - Balanceamento de Carga Dinâmico
+
+### Objetivo
+
+Implementar a comunicação entre múltiplos Masters,
+permitindo o empréstimo e a devolução automática de
+Workers conforme a carga de trabalho.
+
+### Funcionalidades implementadas
+
+- Monitoramento de saturação e normalização.
+- Negociação automática entre Masters.
+- Reserva e confirmação de empréstimos.
+- Redirecionamento de Workers.
+- Registro temporário no Master solicitante.
+- Execução de tarefas por Workers emprestados.
+- Devolução automática ao Master de origem.
+- Encerramento do empréstimo nos dois Masters.
+- Persistência dos registros de empréstimos.
+- Métricas de desempenho e empréstimos.
+- Preservação do protocolo sd_2026_2_v1.
+
+### Execução no Windows PowerShell
+
+Terminal 1 - Master A:
+
+    python -m master.master --config master/master-a.json --host 127.0.0.1 --port 9000
+
+Terminal 2 - Master B:
+
+    python -m master.master --config master/master-b.json --host 127.0.0.1 --port 9001
+
+Terminal 3 - Worker A:
+
+    python -m worker.worker --config worker/worker-a.json
+
+Terminal 4 - Worker B:
+
+    python -m worker.worker --config worker/worker-b.json
+
+Terminal 5 - Gerador de carga:
+
+    python -m client.load_generator --host 127.0.0.1 --port 9000 --task-count 50 --interval-ms 0 --seed 12
+
+Para reproduzir o cenário de empréstimo validado,
+manter inicialmente o Worker A desligado.
+
+### Configuração validada
+
+- Limiar de saturação: 10.
+- Limiar de normalização: 3.
+- Intervalo de monitoramento: 1000 ms.
+- Amostras estáveis: 3.
+
+### Testes automatizados
+
+    python -m pytest -q
+
+Resultado registrado em 26/11/2026:
+
+- 147 testes aprovados.
+- Nenhuma falha.
+- Tempo de execução: 12,46 segundos.
+
+### Evidências
+
+Os registros da validação estão disponíveis em
+[evidencias/issue-3/](evidencias/issue-3/).
+
+Os documentos de planejamento e arquitetura produzidos
+com as skills estão em
+[docs/superpowers/](docs/superpowers/).
+
+### Validação prática
+
+Foi validado localmente o empréstimo do Worker B
+ao Master A, a execução de 50 tarefas, o retorno
+ao Master B e o encerramento do empréstimo nos
+dois Masters.
+
+### Limitações e validações pendentes
+
+- Integração com o Collector externo do professor,
+  indisponível durante a validação final.
+- Cenário de empréstimo com dois Workers simultâneos.
+- Validação específica dos contadores de empréstimos.
+- Recuperação de falhas no envio de return_ack.
+- Investigação da expiração de registros anteriores.
+- Adaptação dos endereços IP para execução em máquinas distintas.

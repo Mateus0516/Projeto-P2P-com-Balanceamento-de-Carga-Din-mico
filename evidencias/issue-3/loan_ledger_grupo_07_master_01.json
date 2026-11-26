@@ -1,0 +1,230 @@
+{
+  "loans": [
+    {
+      "assignment_epoch": 0,
+      "closed_at": 1795701292814,
+      "committed_at": 1795701001780,
+      "created_at": 1795701001779,
+      "home_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_02",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 1000,
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+            "node_label": "grupo_07_master_01",
+            "node_role": "master",
+            "port": 9000
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9001,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "b711828d-b138-4ea2-b18d-5a3ff7c2c578"
+      },
+      "loan_id": "1f3011d3-261c-447c-be94-4631732d70e3",
+      "loan_label": "loan-1f3011d3",
+      "loan_state": "expired",
+      "release_reason": "load normalized",
+      "release_requested_at": 1795701002437,
+      "requester_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_01",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 100,
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+            "node_label": "grupo_07_master_02",
+            "node_role": "master",
+            "port": 9001
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9000,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1"
+      },
+      "requester_source": null,
+      "reservation_deadline": 1795701016779,
+      "reservation_deadline_monotonic": 96695.6084054,
+      "return_ack_at": 1795701003224,
+      "return_status": "returned",
+      "target_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_02",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 1000,
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+            "node_label": "grupo_07_master_01",
+            "node_role": "master",
+            "port": 9000
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9001,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "b711828d-b138-4ea2-b18d-5a3ff7c2c578"
+      },
+      "worker": {
+        "assignment_epoch": 0,
+        "expected_heartbeat_request_id": null,
+        "expected_heartbeat_sequence": null,
+        "group_label": "grupo_07",
+        "heartbeat_misses": 0,
+        "host": "127.0.0.1",
+        "node_id": "e7d496b7-2090-4eff-861c-af574656908f",
+        "node_label": "worker-b",
+        "node_role": "worker",
+        "port": 9102,
+        "status": "available"
+      }
+    },
+    {
+      "assignment_epoch": 0,
+      "closed_at": 1795701363960,
+      "committed_at": 1795701360505,
+      "created_at": 1795701360503,
+      "home_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_02",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 1000,
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+            "node_label": "grupo_07_master_01",
+            "node_role": "master",
+            "port": 9000
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9001,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "b711828d-b138-4ea2-b18d-5a3ff7c2c578"
+      },
+      "loan_id": "fd353829-0104-4eb1-a3d9-3194b367e066",
+      "loan_label": "loan-fd353829",
+      "loan_state": "closed",
+      "release_reason": "load normalized",
+      "release_requested_at": 1795701363533,
+      "requester_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_01",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 1000,
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+            "node_label": "grupo_07_master_02",
+            "node_role": "master",
+            "port": 9001
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9000,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1"
+      },
+      "requester_source": null,
+      "reservation_deadline": 1795701375503,
+      "reservation_deadline_monotonic": 97054.328562,
+      "return_ack_at": 1795701363960,
+      "return_status": "returned",
+      "target_master": {
+        "collector_host": "10.62.220.21",
+        "collector_port": 9100,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_02",
+        "min_home_workers": 0,
+        "monitor_interval_ms": 1000,
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+            "node_label": "grupo_07_master_01",
+            "node_role": "master",
+            "port": 9000
+          }
+        ],
+        "performance_interval_seconds": 10.0,
+        "port": 9001,
+        "release_threshold": 3,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "b711828d-b138-4ea2-b18d-5a3ff7c2c578"
+      },
+      "worker": {
+        "assignment_epoch": 0,
+        "expected_heartbeat_request_id": null,
+        "expected_heartbeat_sequence": null,
+        "group_label": "grupo_07",
+        "heartbeat_misses": 0,
+        "host": "127.0.0.1",
+        "node_id": "e7d496b7-2090-4eff-861c-af574656908f",
+        "node_label": "worker-b",
+        "node_role": "worker",
+        "port": 9102,
+        "status": "available"
+      }
+    }
+  ]
+}

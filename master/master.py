@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import gc
 import json
@@ -704,6 +704,9 @@ class PeerLoanManager:
             reason=str(reason or "return to home"),
             request_id=str(uuid.uuid4()),
         )
+        if conn is None:
+            with self.registry._lock:
+                conn = self.registry.active_sessions.get(worker_id)
         if conn is not None and (hasattr(conn, "sendall") or hasattr(conn, "send")):
             try:
                 send_msg(conn, message)
@@ -727,14 +730,15 @@ class PeerLoanManager:
         loan = self._get_loan_record(loan_id)
         if loan is None:
             return {"status": "rejected", "reason": {"code": "unknown_loan", "message": "loan does not exist"}, "loan_id": str(loan_id)}
-        if loan.get("loan_state") not in {"committed", "closed"}:
-            return {"status": "rejected", "reason": {"code": "invalid_state", "message": "loan must be committed before return confirmation"}, "loan_id": str(loan_id)}
 
         loan_worker = loan.get("worker") or {}
         if str(worker.get("node_id", "")) != str(loan_worker.get("node_id", "")):
             return {"status": "rejected", "reason": {"code": "worker_mismatch", "message": "worker does not match the loan"}, "loan_id": str(loan_id)}
         if int(loan.get("assignment_epoch", 0) or 0) != int(assignment_epoch):
             return {"status": "rejected", "reason": {"code": "stale_epoch", "message": "assignment_epoch does not match the committed loan"}, "loan_id": str(loan_id)}
+        if loan.get("loan_state") not in {"committed", "closed"}:
+            return {"status": "rejected", "reason": {"code": "invalid_state", "message": "loan must be committed before return confirmation"}, "loan_id": str(loan_id)}
+
         if loan.get("loan_state") == "closed":
             return {"status": "accepted", "reason": {"code": "duplicate_return", "message": "worker return already confirmed"}, "loan_id": str(loan_id)}
 
@@ -759,8 +763,8 @@ class PeerLoanManager:
             return {"status": "rejected", "reason": {"code": "invalid_worker", "message": "worker identity is invalid"}, "loan_id": str(loan_id)}
         if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
             return {"status": "rejected", "reason": {"code": "invalid_assignment_epoch", "message": "assignment_epoch must be a non-negative integer"}, "loan_id": str(loan_id)}
-        if status not in {"returned", "accepted", "rejected"}:
-            return {"status": "rejected", "reason": {"code": "invalid_status", "message": "status must be returned, accepted or rejected"}, "loan_id": str(loan_id)}
+        if status not in {"returned", "accepted"}:
+            return {"status": "rejected", "reason": {"code": "invalid_status", "message": "status must be returned or accepted"}, "loan_id": str(loan_id)}
 
         loan = self._get_loan_record(loan_id)
         if loan is None:
@@ -775,7 +779,7 @@ class PeerLoanManager:
         if loan.get("loan_state") == "closed":
             return {"status": "accepted", "reason": {"code": "duplicate_return_ack", "message": "return already acknowledged"}, "loan_id": str(loan_id), "loan_state": "closed"}
         if loan.get("loan_state") != "committed":
-            return {"status": "rejected", "reason": {"code": "invalid_state", "message": "loan must be committed before acknowledging return"}, "loan_id": str(loan_id)}
+            return {"status": "rejected", "loan_id": str(loan_id), "reason": {"code": "invalid_state", "message": "loan must be committed before acknowledging return"}, "loan_id": str(loan_id)}
 
         loan["loan_state"] = "closed"
         loan["closed_at"] = int(time.time() * 1000)
@@ -792,7 +796,71 @@ class PeerLoanManager:
 
     return_committed_loan = process_return_ack
 
+    def mirror_committed_loan(
+        self,
+        *,
+        loan_id: str,
+        requester_master: dict,
+        target_master: dict,
+        home_master: dict,
+        worker: dict,
+        assignment_epoch: int,
+    ) -> dict:
+        if not isinstance(loan_id, str):
+            return {"status": "rejected", "loan_id": str(uuid.uuid4()), "reason": {"code": "invalid_loan_id", "message": "loan_id must be a string"}}
+        try:
+            parsed = uuid.UUID(loan_id)
+        except (ValueError, AttributeError, TypeError):
+            return {"status": "rejected", "loan_id": str(uuid.uuid4()), "reason": {"code": "invalid_loan_id", "message": "loan_id must be a UUIDv4"}}
+        if parsed.version != 4:
+            return {"status": "rejected", "loan_id": str(uuid.uuid4()), "reason": {"code": "invalid_loan_id", "message": "loan_id must be a UUIDv4"}}
+        if not isinstance(requester_master, dict) or requester_master.get("node_role") != "master":
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "invalid_identity", "message": "requester_master must identify a master"}}
+        if not isinstance(target_master, dict) or target_master.get("node_role") != "master":
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "invalid_identity", "message": "target_master must identify a master"}}
+        if not isinstance(home_master, dict) or home_master.get("node_role") != "master":
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "invalid_identity", "message": "home_master must identify a master"}}
+        if not isinstance(worker, dict) or worker.get("node_role") != "worker":
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "invalid_worker", "message": "worker identity is invalid"}}
+        if not isinstance(assignment_epoch, int) or isinstance(assignment_epoch, bool) or assignment_epoch < 0:
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "invalid_assignment_epoch", "message": "assignment_epoch must be non-negative"}}
 
+        existing = self._loans.get(loan_id)
+        if existing is not None:
+            if existing.get("loan_state") == "committed":
+                return {"status": "accepted", "loan_id": loan_id, "loan_state": "committed", "duplicate": True}
+
+        record = self._new_loan_record(
+            loan_id=loan_id,
+            requester_master=dict(requester_master),
+            target_master=dict(target_master),
+            home_master=dict(home_master),
+            worker=dict(worker),
+            assignment_epoch=int(assignment_epoch),
+            loan_state="committed",
+        )
+        record["committed_at"] = int(time.time() * 1000)
+        record["reservation_deadline_monotonic"] = time.monotonic() + (self.reservation_timeout_ms / 1000.0)
+        self._loans[loan_id] = record
+
+        worker_id = str(worker["node_id"])
+        try:
+            reserved_worker = dict(worker)
+            reserved_worker["status"] = "reserved"
+            reserved_worker["loan_id"] = loan_id
+            reserved_worker["assignment_epoch"] = int(assignment_epoch)
+            reserved_worker["home_master"] = dict(home_master)
+            self.registry.upsert_worker(reserved_worker)
+            self._worker_to_loan[worker_id] = loan_id
+        except ValueError:
+            return {"status": "rejected", "loan_id": loan_id, "reason": {"code": "identity_conflict", "message": "worker identity conflict"}}
+
+        self._persist_if_needed()
+        return {"status": "accepted", "loan_id": loan_id, "loan_state": "committed"}
+
+    def list_committed_loans(self) -> list[dict]:
+        with self._lock:
+            return [dict(record) for record in self._loans.values() if record.get("loan_state") == "committed"]
 def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None, peer_manager: PeerLoanManager | None = None) -> None:
     buffer = bytearray()
     write_lock = threading.Lock()
@@ -970,7 +1038,22 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             send_msg(conn, build_ack_message(message, "rejected", master_identity, reason=reason))
                         continue
 
-                    if home_master.get("node_id") != master_identity.get("node_id") or home_master.get("node_label") != master_identity.get("node_label"):
+                    loan_id = payload.get("loan_id")
+                    loan = peer_manager._get_loan_record(loan_id) if peer_manager is not None and loan_id else None
+
+                    valid_loan = (
+                        loan is not None
+                        and loan.get("loan_state") == "committed"
+                        and loan.get("assignment_epoch") == payload.get("assignment_epoch")
+                        and all(
+                            loan.get("worker", {}).get(key) == source.get(key)
+                            and loan.get("home_master", {}).get(key) == home_master.get(key)
+                            and loan.get("requester_master", {}).get(key) == master_identity.get(key)
+                            for key in ("node_id", "node_label", "group_label", "node_role")
+                        )
+                    )
+
+                    if (home_master.get("node_id") != master_identity.get("node_id") or home_master.get("node_label") != master_identity.get("node_label") ) and not valid_loan:
                         reason = "home_master mismatch"
                         log_event("ASD", source["node_label"], "master", msg_type, request_id, "rejected")
                         with write_lock:
@@ -1360,17 +1443,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                     worker = registry.get_worker(source["node_id"])
                     if worker is None or worker.get("status") not in {"available", "suspect"}:
-                        no_task = build_no_task_message(message, source={
-                            "group_label": str(master_identity["group_label"]),
-                            "node_id": str(master_identity["node_id"]),
-                            "node_label": str(master_identity["node_label"]),
-                            "node_role": str(master_identity["node_role"]),
-                        }, destination={
-                            "group_label": str(source["group_label"]),
-                            "node_id": str(source["node_id"]),
-                            "node_label": str(source["node_label"]),
-                            "node_role": str(source["node_role"]),
-                        }, retry_after_ms=1000)
+                        no_task = build_no_task_message(message, source={"group_label": str(master_identity["group_label"]), "node_id": str(master_identity["node_id"]), "node_label": str(master_identity["node_label"]), "node_role": str(master_identity["node_role"])}, destination={"group_label": str(source["group_label"]), "node_id": str(source["node_id"]), "node_label": str(source["node_label"]), "node_role": str(source["node_role"])}, retry_after_ms=1000)
                         with write_lock:
                             send_msg(conn, no_task)
                         log_event("ASD", "master", source["node_label"], "no_task", request_id, "sent")
@@ -1378,17 +1451,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                     assignment = task_queue.claim_next_task(source["node_id"], assignment_epoch=int(payload.get("assignment_epoch", 0)), loan_id=payload.get("loan_id"))
                     if assignment is None:
-                        no_task = build_no_task_message(message, source={
-                            "group_label": str(master_identity["group_label"]),
-                            "node_id": str(master_identity["node_id"]),
-                            "node_label": str(master_identity["node_label"]),
-                            "node_role": str(master_identity["node_role"]),
-                        }, destination={
-                            "group_label": str(source["group_label"]),
-                            "node_id": str(source["node_id"]),
-                            "node_label": str(source["node_label"]),
-                            "node_role": str(source["node_role"]),
-                        }, retry_after_ms=1000)
+                        no_task = build_no_task_message(message, source={"group_label": str(master_identity["group_label"]), "node_id": str(master_identity["node_id"]), "node_label": str(master_identity["node_label"]), "node_role": str(master_identity["node_role"])}, destination={"group_label": str(source["group_label"]), "node_id": str(source["node_id"]), "node_label": str(source["node_label"]), "node_role": str(source["node_role"])}, retry_after_ms=1000)
                         with write_lock:
                             send_msg(conn, no_task)
                         log_event("ASD", "master", source["node_label"], "no_task", request_id, "sent")
@@ -1421,8 +1484,80 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         send_msg(conn, assignment_message)
                     log_event("ASD", "master", source["node_label"], "task_assignment", request_id, "sent")
 
-                else:
-                    log_event("ASD", source["node_label"], "master", msg_type, request_id, "ignored")
+                elif msg_type == "loan_committed":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if peer_manager is None:
+                        peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
+                    mirror = peer_manager.mirror_committed_loan(
+                        loan_id=str(payload.get("loan_id")),
+                        requester_master=dict(payload.get("requester_master") or master_identity),
+                        target_master=dict(payload.get("target_master") or master_identity),
+                        home_master=dict(payload.get("home_master") or master_identity),
+                        worker=dict(payload.get("worker") or {}),
+                        assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                    )
+                    log_event("ASD", "master", source["node_label"], msg_type, request_id, mirror["status"])
+
+                elif msg_type == "notify_worker_returned":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if peer_manager is None:
+                        peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
+                    decision = peer_manager.process_notify_worker_returned(
+                        str(payload.get("loan_id", "")),
+                        worker=dict(payload.get("worker") or {}),
+                        assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                        source=source,
+                    )
+                    ack = build_return_ack_message(
+                        message,
+                        source=master_identity,
+                        destination=source,
+                        loan_id=str(payload.get("loan_id", "")),
+                        worker=dict(payload.get("worker") or {}),
+                        assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                        status="returned" if decision["status"] == "accepted" else "rejected",
+                    )
+                    registry.remember_processed_message(message, ack)
+                    with write_lock:
+                        send_msg(conn, ack)
+                    log_event("ASD", "master", source["node_label"], msg_type, request_id, decision["status"])
+
+                    if decision["status"] == "accepted":
+                        loan = peer_manager._get_loan_record(str(payload.get("loan_id", "")))
+                        requester = (loan or {}).get("requester_master", {})
+
+                        if requester.get("node_id") != master_identity.get("node_id") and requester.get("host") and requester.get("port"):
+                            try:
+                                peer_ack = build_return_ack_message(
+                                    message,
+                                    source=master_identity,
+                                    destination=requester,
+                                    loan_id=str(payload.get("loan_id", "")),
+                                    worker=dict(payload.get("worker") or {}),
+                                    assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                                    status="returned",
+                                    request_id=str(uuid.uuid4()),
+                                )
+                                with socket.create_connection(
+                                    (requester["host"], int(requester["port"])),
+                                    timeout=2.0,
+                                ) as peer_conn:
+                                    send_msg(peer_conn, peer_ack)
+                                log_event("ASD", "master", requester["node_label"], "return_ack", peer_ack["request_id"], "sent")
+                            except (OSError, ValueError) as exc:
+                                log_event("ASD", "master", requester["node_label"], "return_ack", request_id, f"send_failed: {exc}")
+
+                elif msg_type == "return_ack":
+                    payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
+                    if peer_manager is None:
+                        peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
+                    decision = peer_manager.process_return_ack(
+                        str(payload.get("loan_id", "")),
+                        worker=dict(payload.get("worker") or {}),
+                        assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                        status=str(payload.get("status", "returned")),
+                    )
+                    log_event("ASD", "master", source["node_label"], msg_type, request_id, decision["status"])
     except ConnectionResetError:
         if current_worker_identity is not None:
             with registry._lock:
@@ -1459,7 +1594,17 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
 
 class LoadMonitor:
-    def __init__(self, task_queue: "MasterTaskQueue", *, saturation_threshold: int = 10, release_threshold: int = 3, stable_samples: int = 3, monitor_interval_ms: int = 1000):
+    def __init__(
+        self,
+        task_queue: "MasterTaskQueue",
+        *,
+        saturation_threshold: int = 10,
+        release_threshold: int = 3,
+        stable_samples: int = 3,
+        monitor_interval_ms: int = 1000,
+        on_saturated=None,
+        on_released=None,
+    ):
         if not isinstance(saturation_threshold, int) or isinstance(saturation_threshold, bool):
             raise ValueError("saturation_threshold must be an integer")
         if not isinstance(release_threshold, int) or isinstance(release_threshold, bool):
@@ -1489,6 +1634,8 @@ class LoadMonitor:
         self.consecutive_above = 0
         self.consecutive_below = 0
         self.last_transition = None
+        self.on_saturated = on_saturated
+        self.on_released = on_released
         self._lock = threading.RLock()
 
     def _pending_count(self) -> int:
@@ -1515,6 +1662,11 @@ class LoadMonitor:
                         self.last_transition = int(time.time() * 1000)
                         self.state = candidate_state
                         log_event("ASD", "master", "queue", "load_state", str(self.pending_tasks), self.state)
+                        if self.on_saturated is not None:
+                            try:
+                                self.on_saturated()
+                            except Exception:
+                                log_event("ASD", "master", "queue", "saturation_callback_error", "-", "error in on_saturated callback")
                 return self.state
 
             if self.pending_tasks <= self.release_threshold:
@@ -1526,6 +1678,11 @@ class LoadMonitor:
                         self.last_transition = int(time.time() * 1000)
                         self.state = candidate_state
                         log_event("ASD", "master", "queue", "load_state", str(self.pending_tasks), self.state)
+                        if self.on_released is not None:
+                            try:
+                                self.on_released()
+                            except Exception:
+                                log_event("ASD", "master", "queue", "release_callback_error", "-", "error in on_released callback")
                 return self.state
 
             self.consecutive_above = 0
@@ -2048,6 +2205,7 @@ def build_master_performance_metrics(
     master_identity: Dict[str, object],
     *,
     uptime_seconds: float = 0.0,
+    peer_manager: PeerLoanManager | None = None,
 ) -> dict:
     snapshot = task_queue.snapshot()
 
@@ -2071,6 +2229,25 @@ def build_master_performance_metrics(
     busy = len(available_ids & busy_ids)
     idle = len(available_ids - busy_ids)
 
+    loans: list[dict] = []
+    workers_reserved = 0
+    workers_lent = 0
+    workers_received = 0
+    if peer_manager is not None:
+        loans = peer_manager.list_committed_loans()
+        # Include offered loans too by reading ledger snapshot through the peer manager ledger.
+        loans = [dict(record) for record in peer_manager._loans.values()]
+        for loan in loans:
+            state = str(loan.get("loan_state", ""))
+            if state in {"offered", "committed"}:
+                workers_reserved += 1
+                requester = loan.get("requester_master") or {}
+                target = loan.get("target_master") or {}
+                if str(requester.get("node_id", "")) == str(master_identity.get("node_id", "")):
+                    workers_received += 1
+                if str(target.get("node_id", "")) == str(master_identity.get("node_id", "")):
+                    workers_lent += 1
+
     return {
         "uptime_seconds": max(0.0, float(uptime_seconds)),
         "tasks_pending": int(snapshot["pending"]),
@@ -2081,9 +2258,9 @@ def build_master_performance_metrics(
         "workers_active_here": busy + idle,
         "workers_busy": busy,
         "workers_idle": idle,
-        "workers_reserved": 0,
-        "workers_lent": 0,
-        "workers_received": 0,
+        "workers_reserved": workers_reserved,
+        "workers_lent": workers_lent,
+        "workers_received": workers_received,
         "workers_unavailable": sum(
             worker.get("status") == "unavailable"
             for worker in workers.values()
@@ -2094,8 +2271,8 @@ def build_master_performance_metrics(
             "stable_samples": int(master_identity.get("stable_samples", 3)),
             "monitor_interval_ms": int(master_identity.get("monitor_interval_ms", 1000)),
         },
-        "loans": [],
-        "neighbors": [],
+        "loans": loans,
+        "neighbors": [dict(peer) for peer in master_identity.get("peers", [])] if isinstance(master_identity.get("peers", []), list) else [],
     }
 
 
@@ -2109,6 +2286,7 @@ def send_master_performance_report(
     collector_port: int = 9100,
     uptime_seconds: float = 0.0,
     timeout_seconds: float = 2.0,
+    peer_manager: PeerLoanManager | None = None,
 ) -> bool:
     collector_identity = {
         "group_label": str(master_identity.get("group_label", "p2p-cluster")),
@@ -2162,6 +2340,7 @@ def start_master_performance_report_loop(
     collector_port: int = 9100,
     interval_seconds: float = 10.0,
     stop_event: threading.Event | None = None,
+    peer_manager: PeerLoanManager | None = None,
 ) -> threading.Thread:
     if interval_seconds <= 0:
         raise ValueError("interval_seconds deve ser positivo")
@@ -2180,6 +2359,7 @@ def start_master_performance_report_loop(
                 collector_host=collector_host,
                 collector_port=collector_port,
                 uptime_seconds=time.monotonic() - started_at,
+                peer_manager=peer_manager,
             )
 
     thread = threading.Thread(
@@ -2206,6 +2386,8 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
         release_threshold=int(master_identity.get("release_threshold", 3)),
         stable_samples=int(master_identity.get("stable_samples", 3)),
         monitor_interval_ms=int(master_identity.get("monitor_interval_ms", 1000)),
+        on_saturated=lambda: negotiate_peer_loans(registry, task_queue, master_identity, peer_manager),
+        on_released=lambda: release_peer_loans(peer_manager),
     )
     load_monitor.start(
         stop_event=monitor_stop,
@@ -2230,6 +2412,7 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
             master_identity.get("performance_interval_seconds", 10.0)
         ),
         stop_event=performance_stop,
+        peer_manager=peer_manager,
     )
 
     try:
@@ -2253,7 +2436,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Master node for NDJSON registration protocol")
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="Caminho do arquivo JSON de configuraÃ§Ã£o do Master")
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="Caminho do arquivo JSON de configuraÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â£o do Master")
     parser.add_argument("--snapshot-interval-seconds", type=float, default=0.0, help="Intervalo em segundos para imprimir o snapshot do Master; 0 desabilita")
     args = parser.parse_args()
 
@@ -2263,7 +2446,92 @@ def main() -> None:
     run_server(host, port, config, snapshot_interval_seconds=args.snapshot_interval_seconds)
 
 
-if __name__ == "__main__":
-    main()
+
 
 #TODO:
+def negotiate_peer_loans(
+    registry: MasterRegistry,
+    task_queue: MasterTaskQueue,
+    master_identity: dict,
+    peer_manager: PeerLoanManager,
+) -> None:
+    peers = master_identity.get("peers")
+    if not isinstance(peers, list):
+        return
+
+    workers_needed = 1
+    tasks_pending = int(task_queue.monitor_pending_count()) if hasattr(task_queue, "monitor_pending_count") else len(task_queue.pending())
+
+    for peer in peers:
+        if not isinstance(peer, dict):
+            continue
+        if peer.get("node_role") != "master":
+            continue
+        try:
+            peer_identity = {
+                "group_label": str(peer.get("group_label", master_identity.get("group_label", "p2p-cluster"))),
+                "node_id": str(peer["node_id"]),
+                "node_label": str(peer.get("node_label", "master-peer")),
+                "node_role": "master",
+                "host": str(peer.get("host", "127.0.0.1")),
+                "port": int(peer["port"]),
+            }
+            with socket.create_connection((peer_identity["host"], peer_identity["port"]), timeout=2.0) as conn:
+                conn.settimeout(2.0)
+                request = build_request_help_message(
+                    source=master_identity,
+                    destination=peer_identity,
+                    requester_master=master_identity,
+                    workers_needed=workers_needed,
+                    tasks_pending=tasks_pending,
+                )
+                send_msg(conn, request)
+                buffer = bytearray()
+                responses = recv_msgs(conn, buffer)
+                if responses is None:
+                    continue
+                response = next((item for item in responses if item.get("request_id") == request["request_id"]), None)
+                if not isinstance(response, dict) or response.get("type") != "response_accepted":
+                    continue
+
+                payload = response.get("payload", {})
+                confirm = build_confirm_loan_message(
+                    response,
+                    source=master_identity,
+                    destination=peer_identity,
+                    loan_id=str(payload["loan_id"]),
+                    requester_master=master_identity,
+                    target_master=peer_identity,
+                    home_master=peer_identity,
+                    worker=dict(payload["worker"]),
+                    assignment_epoch=int(payload["assignment_epoch"]),
+                    reservation_timeout_ms=15000,
+                    loan_state="committed",
+                )
+                send_msg(conn, confirm)
+                buffer = bytearray()
+                replies = recv_msgs(conn, buffer)
+                if replies:
+                    committed = next((item for item in replies if item.get("type") == "loan_committed"), None)
+                    if isinstance(committed, dict):
+                        committed_payload = committed.get("payload", {})
+                        peer_manager.mirror_committed_loan(
+                            loan_id=str(committed_payload["loan_id"]),
+                            requester_master=dict(committed_payload["requester_master"]),
+                            target_master=dict(committed_payload["target_master"]),
+                            home_master=dict(committed_payload["home_master"]),
+                            worker=dict(committed_payload["worker"]),
+                            assignment_epoch=int(committed_payload["assignment_epoch"]),
+                        )
+                        log_event("ASD", master_identity["node_label"], str(committed_payload.get("worker", {}).get("node_label", "worker")), "loan_committed", str(committed.get("request_id", "-")), "mirrored")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            log_event("ASD", master_identity["node_label"], str(peer.get("node_label", "peer")), "request_help", "-", f"peer_error:{exc}")
+
+
+def release_peer_loans(peer_manager: PeerLoanManager) -> None:
+    for loan in peer_manager.list_committed_loans():
+        if str(loan.get("requester_master", {}).get("node_id", "")) == str(peer_manager.master_identity.get("node_id", "")):
+            peer_manager.issue_release_command(str(loan["loan_id"]), reason="load normalized")
+
+if __name__ == "__main__":
+    main()

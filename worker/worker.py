@@ -590,11 +590,16 @@ class WorkerSessionManager:
             if str(message.get("source", {}).get("node_id", "")) != str(current_master.get("node_id", "")):
                 return False
 
-            self.busy = True
+            release_loan_id = str(payload.get("loan_id", ""))
+            release_epoch = int(payload.get("assignment_epoch", 0))
+
+            self.busy = False
             self.task_request_pending = False
             self.current_task = None
-            self.config["home_master"] = dict(home_master)
-            self.config["master"] = dict(home_master)
+            self.next_task_ready_at = time.monotonic()
+            self.config["assignment_epoch"] = 0
+            self.config["loan_id"] = None
+
             self.master_host = str(home_master.get("host") or self.master_host)
             self.master_port = int(home_master.get("port") or self.master_port)
 
@@ -785,7 +790,7 @@ class WorkerSessionManager:
 
                 self.request_task(session)
                 try:
-                    message = session.wait_for_message(types={"task_assignment", "no_task", "task_ack"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
+                    message = session.wait_for_message(types={"task_assignment", "no_task", "task_ack", "command_redirect", "command_release"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
                 except TimeoutError:
                     continue
                 self.process_inbound_message(message)
