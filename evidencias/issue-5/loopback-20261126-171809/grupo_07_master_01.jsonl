@@ -1,0 +1,3 @@
+{"assignment_epoch": 0, "loan_id": "204ef95c-2295-49cc-a897-73fc89ded7c2", "loan_label": "grupo_07_master_01_loan_000001", "loan_state": "offered", "timestamp_ms": 1795724290118}
+{"assignment_epoch": 1, "loan_id": "204ef95c-2295-49cc-a897-73fc89ded7c2", "loan_label": "grupo_07_master_01_loan_000001", "loan_state": "committed", "timestamp_ms": 1795724300082}
+{"assignment_epoch": 2, "loan_id": "204ef95c-2295-49cc-a897-73fc89ded7c2", "loan_label": "grupo_07_master_01_loan_000001", "loan_state": "closed", "timestamp_ms": 1795724310317}

@@ -6403,15 +6403,15 @@ def test_performance_report_protocol_validation():
     from protocol import build_performance_report_message, validate_message
 
     master = {
-        "group_label": "p2p-cluster",
+        "group_label": "grupo_07",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
     }
     collector = {
-        "group_label": "p2p-cluster",
-        "node_id": "33333333-3333-4333-8333-333333333333",
-        "node_label": "collector",
+        "group_label": "grupo_00",
+        "node_id": "c011ec70-0000-4000-8000-000000000001",
+        "node_label": "grupo_00_collector_01",
         "node_role": "collector",
     }
     metrics = {
@@ -6431,6 +6431,7 @@ def test_performance_report_protocol_validation():
         "thresholds": {
             "saturation_threshold": 10,
             "release_threshold": 3,
+            "stable_samples": 3,
         },
         "loans": [],
         "neighbors": [],
@@ -6464,7 +6465,7 @@ def test_performance_report_rejects_invalid_counters():
         "workers_lent": 0,
         "workers_received": 0,
         "workers_unavailable": 0,
-        "thresholds": {},
+        "thresholds": {"saturation_threshold": 10, "release_threshold": 3, "stable_samples": 3},
         "loans": [],
         "neighbors": [],
     }
@@ -6493,15 +6494,15 @@ def test_collector_tcp_receives_and_persists_performance_report(tmp_path):
     from protocol import build_performance_report_message
 
     master = {
-        "group_label": "p2p-cluster",
+        "group_label": "grupo_07",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
     }
     collector = {
-        "group_label": "p2p-cluster",
-        "node_id": "33333333-3333-4333-8333-333333333333",
-        "node_label": "collector",
+        "group_label": "grupo_00",
+        "node_id": "c011ec70-0000-4000-8000-000000000001",
+        "node_label": "grupo_00_collector_01",
         "node_role": "collector",
     }
     metrics = {
@@ -6518,7 +6519,7 @@ def test_collector_tcp_receives_and_persists_performance_report(tmp_path):
         "workers_lent": 0,
         "workers_received": 0,
         "workers_unavailable": 0,
-        "thresholds": {},
+        "thresholds": {"saturation_threshold": 10, "release_threshold": 3, "stable_samples": 3},
         "loans": [],
         "neighbors": [],
     }

@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from protocol import (
+    COLLECTOR_NODE_ID,
+    REQUIRED_NODE_FIELDS,
     MasterRegistry,
     build_command_release_message,
     build_command_redirect_message,
@@ -52,6 +54,13 @@ from protocol import (
 )
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
+COLLECTOR_IDENTITY_DEFAULTS = {
+    "group_label": "grupo_00",
+    "node_id": COLLECTOR_NODE_ID,
+    "node_label": "grupo_00_collector_01",
+    "node_role": "collector",
+}
+PEER_NODE_FIELDS = (*REQUIRED_NODE_FIELDS, "host", "port")
 
 
 def _ensure_v4_uuid(value: object) -> str:
@@ -288,6 +297,7 @@ class PeerLoanManager:
         self._lock = threading.RLock()
         self._loans: Dict[str, Dict[str, object]] = {}
         self._worker_to_loan: Dict[str, str] = {}
+        self._peer_contacts: dict[str, tuple[str, int | None]] = {}
         master_label = str(self.master_identity.get("node_label", "master"))
         base_path = (
             Path(ledger_path)
@@ -919,6 +929,33 @@ class PeerLoanManager:
         self._persist_if_needed()
         return {"status": "accepted", "loan_id": loan_id, "loan_state": "committed"}
 
+    def record_peer_contact(self, node_id: str, *, status: str, last_seen_ms: int | None = None) -> None:
+        with self._lock:
+            previous_seen = self._peer_contacts.get(node_id, ("unknown", None))[1]
+            if status == "available":
+                last_seen_ms = last_seen_ms if last_seen_ms is not None else time.time_ns() // 1_000_000
+                if previous_seen is not None and last_seen_ms < previous_seen:
+                    return
+            else:
+                last_seen_ms = previous_seen
+            self._peer_contacts[node_id] = (status, last_seen_ms)
+
+    def observe_peer_message(self, message: dict) -> None:
+        source = message["source"]
+        if any(message["destination"].get(key) != self.master_identity.get(key) for key in REQUIRED_NODE_FIELDS):
+            return
+        for peer in self.master_identity.get("peers", []):
+            if isinstance(peer, dict) and all(peer.get(key) == source.get(key) for key in REQUIRED_NODE_FIELDS):
+                self.record_peer_contact(source["node_id"], status="available")
+                break
+
+    def telemetry_snapshot(self) -> tuple[list[dict], dict]:
+        with self._lock:
+            return (
+                [dict(record) for record in self._loans.values()],
+                dict(self._peer_contacts),
+            )
+
     def list_committed_loans(self) -> list[dict]:
         with self._lock:
             return [dict(record) for record in self._loans.values() if record.get("loan_state") == "committed"]
@@ -999,6 +1036,8 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                 msg_type = message["type"]
                 request_id = message["request_id"]
                 source = message["source"]
+                if peer_manager is not None and source["node_role"] == "master":
+                    peer_manager.observe_peer_message(message)
 
                 if msg_type in {"heartbeat", "heartbeat_ack", "task_request", "task_result"}:
                     worker_id = source["node_id"]
@@ -1129,6 +1168,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         "host": payload.get("host", "127.0.0.1"),
                         "port": payload.get("port", 0),
                         "assignment_epoch": int(payload.get("assignment_epoch", 0)),
+                        "registered_loan_id": None,
                     }
                     try:
                         registry.upsert_worker(worker_record)
@@ -1155,6 +1195,10 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                     registry.remember_processed_message(message, ack)
                     with write_lock:
                         send_msg(conn, ack)
+                    if valid_loan:
+                        with registry._lock:
+                            if registry.is_active_session(source["node_id"], conn):
+                                registry.get_worker(source["node_id"])["registered_loan_id"] = loan_id
                     log_event("ASD", "master", source["node_label"], ack["type"], request_id, "sent")
 
                     if current_worker_thread is None:
@@ -2334,44 +2378,89 @@ def build_master_performance_metrics(
         if node_id in active_ids and worker.get("status") == "available"
     }
 
+    loans: list[dict] = []
+    reserved_ids: set[str] = set()
+    lent_ids: set[str] = set()
+    received_ids: set[str] = set()
+    borrowed_ids: set[str] = set()
+    contacts = {}
+    local_id = master_identity["node_id"]
+    now_ms = time.time_ns() // 1_000_000
+    now_monotonic = time.monotonic()
+    if peer_manager is not None:
+        records, contacts = peer_manager.telemetry_snapshot()
+        for record in records:
+            state = record["loan_state"]
+            worker_id = record["worker"]["node_id"]
+            is_home = record["home_master"]["node_id"] == local_id
+            is_target = record["target_master"]["node_id"] == local_id
+            if is_target and not is_home:
+                borrowed_ids.add(worker_id)
+            if state not in {"offered", "committed"}:
+                continue
+            if state == "offered":
+                deadline = record.get("reservation_deadline_monotonic")
+                if isinstance(deadline, (int, float)):
+                    if now_monotonic > deadline:
+                        continue
+                elif record.get("reservation_deadline", now_ms) < now_ms:
+                    continue
+            if is_home:
+                if state == "offered":
+                    reserved_ids.add(worker_id)
+                else:
+                    lent_ids.add(worker_id)
+            elif is_target and state == "committed":
+                worker = workers.get(worker_id, {})
+                if (
+                    worker_id in available_ids
+                    and worker.get("registered_loan_id") == record["loan_id"]
+                    and worker.get("assignment_epoch") == record["assignment_epoch"]
+                ):
+                    received_ids.add(worker_id)
+                if record.get("release_requested_at") is not None:
+                    state = "returning"
+                else:
+                    state = "active" if worker_id in received_ids else "waiting_worker"
+            else:
+                continue
+            loans.append({
+                "loan_id": record["loan_id"],
+                "loan_label": record["loan_label"],
+                "worker": {key: record["worker"][key] for key in REQUIRED_NODE_FIELDS},
+                "home_master": {key: record["home_master"][key] for key in PEER_NODE_FIELDS},
+                "target_master": {key: record["target_master"][key] for key in PEER_NODE_FIELDS},
+                "loan_state": state,
+            })
+
+    available_ids -= reserved_ids | lent_ids | (borrowed_ids - received_ids)
     busy = len(available_ids & busy_ids)
     idle = len(available_ids - busy_ids)
-
-    loans: list[dict] = []
-    workers_reserved = 0
-    workers_lent = 0
-    workers_received = 0
-    if peer_manager is not None:
-        loans = peer_manager.list_committed_loans()
-        # Include offered loans too by reading ledger snapshot through the peer manager ledger.
-        loans = [dict(record) for record in peer_manager._loans.values()]
-        for loan in loans:
-            state = str(loan.get("loan_state", ""))
-            if state in {"offered", "committed"}:
-                workers_reserved += 1
-                requester = loan.get("requester_master") or {}
-                target = loan.get("target_master") or {}
-                if str(requester.get("node_id", "")) == str(master_identity.get("node_id", "")):
-                    workers_received += 1
-                if str(target.get("node_id", "")) == str(master_identity.get("node_id", "")):
-                    workers_lent += 1
+    neighbors = []
+    for peer in master_identity.get("peers", []):
+        status, last_seen_ms = contacts.get(peer["node_id"], ("unknown", None))
+        neighbors.append({
+            "node": {key: peer[key] for key in PEER_NODE_FIELDS},
+            "status": status,
+            "last_seen_ms": last_seen_ms,
+        })
 
     return {
-        "uptime_seconds": max(0.0, float(uptime_seconds)),
+        "uptime_seconds": max(0, int(uptime_seconds)),
         "tasks_pending": int(snapshot["pending"]),
         "tasks_running": int(snapshot["running"]),
         "tasks_completed": int(snapshot["completed"]),
         "tasks_failed": int(snapshot["failed"]),
-        "workers_owned": len(workers),
+        "workers_owned": len(workers.keys() - borrowed_ids),
         "workers_active_here": busy + idle,
         "workers_busy": busy,
         "workers_idle": idle,
-        "workers_reserved": workers_reserved,
-        "workers_lent": workers_lent,
-        "workers_received": workers_received,
+        "workers_reserved": len(reserved_ids),
+        "workers_lent": len(lent_ids),
+        "workers_received": len(received_ids),
         "workers_unavailable": sum(
-            worker.get("status") == "unavailable"
-            for worker in workers.values()
+            worker.get("status") == "unavailable" and node_id not in lent_ids | reserved_ids | borrowed_ids
+            for node_id, worker in workers.items()
         ),
         "thresholds": {
             "saturation_threshold": int(master_identity.get("saturation_threshold", 10)),
@@ -2380,7 +2469,7 @@ def build_master_performance_metrics(
             "monitor_interval_ms": int(master_identity.get("monitor_interval_ms", 1000)),
         },
         "loans": loans,
-        "neighbors": [dict(peer) for peer in master_identity.get("peers", [])] if isinstance(master_identity.get("peers", []), list) else [],
+        "neighbors": neighbors,
     }
 
 
@@ -2389,17 +2478,15 @@ def send_master_performance_report(
     task_queue: MasterTaskQueue,
     master_identity: Dict[str, object],
     *,
-    collector_host: str = "127.0.0.1",
-    collector_port: int = 9100,
+    collector_host: str | None = None,
+    collector_port: int | None = None,
     uptime_seconds: float = 0.0,
     timeout_seconds: float = 2.0,
     peer_manager: PeerLoanManager | None = None,
 ) -> bool:
     collector_identity = {
-        "group_label": str(master_identity.get("group_label", "p2p-cluster")),
-        "node_id": "33333333-3333-4333-8333-333333333333",
-        "node_label": "collector",
-        "node_role": "collector",
+        field: master_identity.get(f"collector_{field}", default)
+        for field, default in COLLECTOR_IDENTITY_DEFAULTS.items()
     }
 
     try:
@@ -2408,16 +2495,20 @@ def send_master_performance_report(
             task_queue,
             master_identity,
             uptime_seconds=uptime_seconds,
+            peer_manager=peer_manager,
         )
 
         message = build_performance_report_message(
-            master_identity,
+            {key: master_identity[key] for key in REQUIRED_NODE_FIELDS},
             collector_identity,
             metrics=metrics,
         )
 
         with socket.create_connection(
-            (collector_host, int(collector_port)),
+            (
+                collector_host if collector_host is not None else str(master_identity.get("collector_host", "127.0.0.1")),
+                int(collector_port if collector_port is not None else master_identity.get("collector_port", 9100)),
+            ),
             timeout=timeout_seconds,
         ) as conn:
             conn.settimeout(timeout_seconds)
@@ -2425,7 +2516,7 @@ def send_master_performance_report(
 
         return True
 
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, KeyError, OverflowError) as exc:
         log_event(
             "ASD",
             "master",
@@ -2442,8 +2533,8 @@ def start_master_performance_report_loop(
     task_queue: MasterTaskQueue,
     master_identity: Dict[str, object],
     *,
-    collector_host: str = "127.0.0.1",
-    collector_port: int = 9100,
+    collector_host: str | None = None,
+    collector_port: int | None = None,
     interval_seconds: float = 10.0,
     stop_event: threading.Event | None = None,
     peer_manager: PeerLoanManager | None = None,
@@ -2511,8 +2602,6 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
         registry,
         task_queue,
         master_identity,
-        collector_host=str(master_identity.get("collector_host", "127.0.0.1")),
-        collector_port=int(master_identity.get("collector_port", 9100)),
         interval_seconds=float(
             master_identity.get("performance_interval_seconds", 10.0)
         ),
@@ -2597,8 +2686,11 @@ def negotiate_peer_loans(
                 buffer = bytearray()
                 responses = recv_msgs(conn, buffer)
                 if responses is None:
+                    peer_manager.record_peer_contact(peer_identity["node_id"], status="unavailable")
                     continue
                 response = next((item for item in responses if item.get("request_id") == request["request_id"]), None)
+                if isinstance(response, dict) and validate_message(response) and response.get("type") in {"response_accepted", "response_rejected"}:
+                    peer_manager.observe_peer_message(response)
                 if not isinstance(response, dict) or response.get("type") != "response_accepted":
                     continue
 
@@ -2619,9 +2711,13 @@ def negotiate_peer_loans(
                 send_msg(conn, confirm)
                 buffer = bytearray()
                 replies = recv_msgs(conn, buffer)
+                if replies is None:
+                    peer_manager.record_peer_contact(peer_identity["node_id"], status="unavailable")
                 if replies:
                     committed = next((item for item in replies if item.get("type") == "loan_committed" and item.get("request_id") == confirm["request_id"]), None)
                     if isinstance(committed, dict):
+                        if validate_message(committed):
+                            peer_manager.observe_peer_message(committed)
                         committed_payload = committed["payload"]["loan"]
                         peer_manager.mirror_committed_loan(
                             loan_id=str(committed_payload["loan_id"]),
@@ -2634,6 +2730,8 @@ def negotiate_peer_loans(
                         )
                         log_event("ASD", master_identity["node_label"], str(committed_payload.get("worker", {}).get("node_label", "worker")), "loan_committed", str(committed.get("request_id", "-")), "mirrored")
         except (OSError, ValueError, KeyError, TypeError) as exc:
+            if isinstance(exc, OSError) and peer.get("node_id"):
+                peer_manager.record_peer_contact(peer["node_id"], status="unavailable")
             log_event("ASD", master_identity["node_label"], str(peer.get("node_label", "peer")), "request_help", "-", f"peer_error:{exc}")
 
 

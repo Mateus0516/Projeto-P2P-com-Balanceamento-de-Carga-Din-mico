@@ -1,0 +1,7 @@
+﻿received_at_utc;peer_ip;group_label;node_label;node_id;timestamp_ms;uptime_seconds;tasks_pending;tasks_running;tasks_completed;tasks_failed;workers_owned;workers_active_here;workers_busy;workers_idle;workers_reserved;workers_lent;workers_received;workers_unavailable
+2026-11-26T20:18:20.056717+00:00;127.0.0.1;grupo_07;grupo_07_master_02;b711828d-b138-4ea2-b18d-5a3ff7c2c578;1795724300051;10;0;0;0;0;2;2;0;2;0;0;0;0
+2026-11-26T20:18:20.057937+00:00;127.0.0.1;grupo_07;grupo_07_master_01;cf662f72-9291-48fd-bc0e-591eea76e6b1;1795724300052;10;0;0;0;0;2;1;0;1;1;0;0;0
+2026-11-26T20:18:30.064571+00:00;127.0.0.1;grupo_07;grupo_07_master_01;cf662f72-9291-48fd-bc0e-591eea76e6b1;1795724310060;20;0;0;0;0;2;1;0;1;0;1;0;0
+2026-11-26T20:18:30.065633+00:00;127.0.0.1;grupo_07;grupo_07_master_02;b711828d-b138-4ea2-b18d-5a3ff7c2c578;1795724310061;20;0;0;0;0;2;3;0;3;0;0;1;0
+2026-11-26T20:18:40.088615+00:00;127.0.0.1;grupo_07;grupo_07_master_01;cf662f72-9291-48fd-bc0e-591eea76e6b1;1795724320069;30;0;0;0;0;2;2;0;2;0;0;0;0
+2026-11-26T20:18:40.089693+00:00;127.0.0.1;grupo_07;grupo_07_master_02;b711828d-b138-4ea2-b18d-5a3ff7c2c578;1795724320070;30;0;0;0;0;2;2;0;2;0;0;0;0

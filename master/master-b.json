@@ -13,6 +13,10 @@
   "stable_samples": 3,
   "collector_host": "10.62.220.21",
   "collector_port": 9100,
+  "collector_group_label": "grupo_00",
+  "collector_node_id": "c011ec70-0000-4000-8000-000000000001",
+  "collector_node_label": "grupo_00_collector_01",
+  "collector_node_role": "collector",
   "performance_interval_seconds": 10.0,
   "min_home_workers": 1,
   "peers": [

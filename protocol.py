@@ -1,9 +1,10 @@
 import json
+import math
+import re
 import socket
 import threading
 import time
 import uuid
-import re
 from typing import Any, List
 
 MAX_NDJSON_MESSAGE_BYTES = 65536
@@ -18,6 +19,8 @@ REQUIRED_MESSAGE_FIELDS = (
     "destination",
     "payload",
 )
+
+COLLECTOR_NODE_ID = "c011ec70-0000-4000-8000-000000000001"
 
 REQUIRED_NODE_FIELDS = (
     "group_label",
@@ -233,6 +236,23 @@ def validate_metrics_request_payload(payload: Any) -> bool:
     return isinstance(payload, dict)
 
 
+REPORT_HOME_LOAN_STATES = {"offered", "committed", "closed", "cancelled", "expired"}
+REPORT_TARGET_LOAN_STATES = {"waiting_worker", "active", "returning", "unknown"}
+
+
+def _validate_report_node(node: Any, role: str, *, address: bool = False) -> bool:
+    if not _validate_node_identity(node) or node["node_role"] != role:
+        return False
+    group = node["group_label"]
+    suffix = r"_master_[0-9]{2}_worker_[0-9]{2}" if role == "worker" else rf"_{role}_[0-9]{{2}}"
+    if not re.fullmatch(r"grupo_[0-9]{2}", group) or not re.fullmatch(re.escape(group) + suffix, node["node_label"]):
+        return False
+    return not address or (
+        isinstance(node.get("host"), str) and bool(node["host"].strip())
+        and type(node.get("port")) is int and 1 <= node["port"] <= 65535
+    )
+
+
 def validate_performance_report_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -255,22 +275,67 @@ def validate_performance_report_payload(payload: Any) -> bool:
 
     for field in required_counters:
         value = payload.get(field)
-        if type(value) not in (int, float) or value < 0:
+        if type(value) is not int or value < 0:
             return False
 
     if payload["workers_active_here"] != (
         payload["workers_busy"] + payload["workers_idle"]
     ):
         return False
-
-    if not isinstance(payload.get("thresholds"), dict):
+    if payload["workers_received"] > payload["workers_active_here"]:
         return False
 
-    if not isinstance(payload.get("loans"), list):
+    thresholds = payload.get("thresholds")
+    if not isinstance(thresholds, dict):
+        return False
+    for field in ("saturation_threshold", "release_threshold", "stable_samples"):
+        value = thresholds.get(field)
+        if type(value) is not int or value < 0:
+            return False
+    if thresholds["stable_samples"] < 1:
+        return False
+    if thresholds["release_threshold"] >= thresholds["saturation_threshold"]:
         return False
 
-    if not isinstance(payload.get("neighbors"), list):
+    loans = payload.get("loans")
+    if not isinstance(loans, list):
         return False
+    for loan in loans:
+        if not isinstance(loan, dict) or not _validate_loan_id(loan.get("loan_id")):
+            return False
+        label = loan.get("loan_label")
+        state = loan.get("loan_state")
+        if not isinstance(label, str) or not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", label):
+            return False
+        if not isinstance(state, str) or state not in REPORT_HOME_LOAN_STATES | REPORT_TARGET_LOAN_STATES:
+            return False
+        if not _validate_report_node(loan.get("worker"), "worker"):
+            return False
+        for field in ("home_master", "target_master"):
+            if not _validate_report_node(loan.get(field), "master", address=True):
+                return False
+
+    neighbors = payload.get("neighbors")
+    if not isinstance(neighbors, list):
+        return False
+    for neighbor in neighbors:
+        if not isinstance(neighbor, dict) or not _validate_report_node(neighbor.get("node"), "master", address=True):
+            return False
+        if neighbor.get("status") not in ("unknown", "available", "unavailable") or "last_seen_ms" not in neighbor:
+            return False
+        last_seen = neighbor["last_seen_ms"]
+        if last_seen is not None and (type(last_seen) is not int or last_seen < 0):
+            return False
+
+    if "system" in payload:
+        system = payload["system"]
+        if not isinstance(system, dict):
+            return False
+        for value in system.values():
+            if value is not None and (
+                type(value) not in (int, float) or value < 0 or (type(value) is float and not math.isfinite(value))
+            ):
+                return False
 
     return True
 
@@ -696,8 +761,26 @@ def validate_message(message: Any) -> bool:
             return False
 
     if message["type"] == "performance_report":
-        if not validate_performance_report_payload(payload):
+        identity_fields = set(REQUIRED_NODE_FIELDS)
+        if not isinstance(message["source"], dict) or set(message["source"]) != identity_fields:
             return False
+        if not isinstance(message["destination"], dict) or set(message["destination"]) != identity_fields:
+            return False
+        source = message["source"]
+        destination = message["destination"]
+        if not _validate_report_node(source, "master") or not _validate_report_node(destination, "collector"):
+            return False
+        if destination["node_id"] != COLLECTOR_NODE_ID or not validate_performance_report_payload(payload):
+            return False
+        for loan in payload["loans"]:
+            if source["node_id"] == loan["home_master"]["node_id"]:
+                states = REPORT_HOME_LOAN_STATES
+            elif source["node_id"] == loan["target_master"]["node_id"]:
+                states = REPORT_TARGET_LOAN_STATES
+            else:
+                return False
+            if loan["loan_state"] not in states:
+                return False
 
     if message["type"] == "metrics_response":
         if not validate_metrics_response_payload(payload):
@@ -1210,6 +1293,11 @@ def build_performance_report_message(
     metrics: dict,
     request_id: str | None = None,
 ) -> dict:
+    identity_fields = set(REQUIRED_NODE_FIELDS)
+    if not isinstance(source, dict) or set(source) != identity_fields:
+        raise ValueError("performance_report source must contain exactly four identity fields")
+    if not isinstance(destination, dict) or set(destination) != identity_fields:
+        raise ValueError("performance_report destination must contain exactly four identity fields")
     if not validate_performance_report_payload(metrics):
         raise ValueError("performance_report payload inv?lido")
 
@@ -1747,6 +1835,7 @@ class MasterRegistry:
             if expected_id is not None and expected_sequence is not None:
                 worker["heartbeat_misses"] = int(worker.get("heartbeat_misses", 0) or 0) + 1
                 worker["expected_heartbeat_request_id"] = None
+
                 worker["expected_heartbeat_sequence"] = None
                 if worker["heartbeat_misses"] >= 3:
                     if str(worker.get("status", "")) not in {"reserved", "committed", "offered"}:

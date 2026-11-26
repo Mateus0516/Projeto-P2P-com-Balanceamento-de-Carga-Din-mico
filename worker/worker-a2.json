@@ -1,12 +1,12 @@
 {
   "group_label": "grupo_07",
   "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
-  "node_label": "worker-a2",
+  "node_label": "grupo_07_master_01_worker_02",
   "node_role": "worker",
   "host": "127.0.0.1",
   "port": 9103,
   "uuid": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
-  "label": "worker-a2",
+  "label": "grupo_07_master_01_worker_02",
   "assignment_epoch": 0,
   "loan_id": null,
   "master": {
