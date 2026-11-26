@@ -1,4 +1,4 @@
-﻿import json
+import json
 import socket
 import threading
 import time
@@ -723,7 +723,13 @@ def validate_message(message: Any) -> bool:
     if not _validate_node_identity(message["destination"]):
         return False
 
-    if message["type"] in {"request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "command_redirect", "register_temporary_worker", "get_loan_status", "loan_status", "cancel_loan"}:
+    if message["type"] == "command_redirect":
+        if message["source"].get("node_role") != "master":
+            return False
+        if message["destination"].get("node_role") != "worker":
+            return False
+
+    if message["type"] in {"request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "register_temporary_worker", "get_loan_status", "loan_status", "cancel_loan"}:
         if message["source"].get("node_role") != "master":
             return False
         if message["destination"].get("node_role") != "master":
@@ -1098,7 +1104,7 @@ def build_command_redirect_message(request_message: dict, source: dict, destinat
         raise ValueError("home must be a valid master identity")
 
     resolved_home = dict(home_master or home or source)
-    resolved_target = dict(target_master or destination if isinstance(destination, dict) and destination.get("node_role") == "master" else source)
+    resolved_target = dict(target_master or (destination if isinstance(destination, dict) and destination.get("node_role") == "master" else source))
     payload = {
         "loan_id": str(loan_id),
         "worker": dict(worker),

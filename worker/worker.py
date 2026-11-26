@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import argparse
 import json
 import queue
@@ -1057,22 +1057,27 @@ def run_listener(host: str, port: int, worker_identity: Dict[str, object]) -> No
 def main() -> None:
     parser = argparse.ArgumentParser(description="Worker node for NDJSON registration protocol")
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=9101)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--master-host", default="127.0.0.1")
     parser.add_argument("--master-port", type=int, default=9000)
     args = parser.parse_args()
 
     config_path = args.config if args.config.is_absolute() else (Path.cwd() / args.config).resolve()
     config = load_or_create_config(config_path)
-    config["host"] = args.host
-    if args.port != 9101 or config.get("node_label") == "worker-b":
+    if args.host is not None:
+        config["host"] = args.host
+    if args.port is not None:
         config["port"] = args.port
     config["master"] = _normalize_master_identity({"master": config.get("master")}, default_host=args.master_host, default_port=args.master_port)
 
     stop_event = threading.Event()
-    run_worker(args.master_host, args.master_port, config, stop_event=stop_event)
+    try:
+        master_identity = load_master_identity(config); run_worker(str(master_identity["host"]), int(master_identity["port"]), config, stop_event=stop_event)
+    except KeyboardInterrupt:
+        stop_event.set()
 
 
 if __name__ == "__main__":
     main()
+

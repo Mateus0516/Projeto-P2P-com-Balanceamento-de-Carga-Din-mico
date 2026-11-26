@@ -280,14 +280,20 @@ def start_master_snapshot_loop(task_queue: "MasterTaskQueue", *, interval_second
 class PeerLoanManager:
     VALID_STATES = {"offered", "committed", "closed", "cancelled", "expired"}
 
-    def __init__(self, registry: MasterRegistry, master_identity: Dict[str, object], *, ledger_path: str | Path | None = None, reservation_timeout_ms: int = 15000):
+    def __init__(self, registry: MasterRegistry, master_identity: Dict[str, object], *, ledger_path: str | Path | None = None, reservation_timeout_ms: int = 15000, task_queue=None):
         self.registry = registry
+        self.task_queue = task_queue
         self.master_identity = dict(master_identity)
         self.reservation_timeout_ms = int(reservation_timeout_ms)
         self._lock = threading.RLock()
         self._loans: Dict[str, Dict[str, object]] = {}
         self._worker_to_loan: Dict[str, str] = {}
-        base_path = Path(ledger_path) if ledger_path is not None else (ROOT / "master" / "loan_ledger.json")
+        master_label = str(self.master_identity.get("node_label", "master"))
+        base_path = (
+            Path(ledger_path)
+            if ledger_path is not None
+            else ROOT / "master" / f"loan_ledger_{master_label}.json"
+        )
         self.ledger_path = Path(base_path)
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
         self._load_ledger()
@@ -338,9 +344,13 @@ class PeerLoanManager:
             return False, "no_workers_available"
         if len(available_workers) - int(workers_needed) < self._get_home_reserve():
             return False, "min_home_workers"
-        saturation_threshold = int(self.master_identity.get("saturation_threshold", 10))
-        if int(tasks_pending) >= saturation_threshold and len(available_workers) <= int(workers_needed) + max(1, self._get_home_reserve()):
-            return False, "high_load"
+        # A carga informada em request_help pertence ao solicitante.
+        # Nunca usar esse numero para classificar a carga do emprestador.
+        local_queue = getattr(self, "task_queue", None)
+        if local_queue is not None:
+            local_pending = int(local_queue.monitor_pending_count()) if hasattr(local_queue, "monitor_pending_count") else len(local_queue.pending())
+            if local_pending > int(self.master_identity.get("saturation_threshold", 10)):
+                return False, "high_load"
         return True, None
 
     def _reserve_worker(self, worker_id: str, loan_id: str) -> dict | None:
@@ -612,10 +622,10 @@ class PeerLoanManager:
             return {"status": "rejected", "reason": {"code": "invalid_target_master", "message": "target_master must identify a master"}, "message": None}
 
         destination = {
-            "group_label": str(target_master_identity.get("group_label", self.master_identity.get("group_label", "p2p-cluster"))),
-            "node_id": str(target_master_identity.get("node_id")),
-            "node_label": str(target_master_identity.get("node_label")),
-            "node_role": str(target_master_identity.get("node_role", "master")),
+            "group_label": str(worker.get("group_label")),
+            "node_id": str(worker.get("node_id")),
+            "node_label": str(worker.get("node_label")),
+            "node_role": "worker",
         }
         source_identity = {
             "group_label": str(self.master_identity.get("group_label", "p2p-cluster")),
@@ -640,11 +650,16 @@ class PeerLoanManager:
             home=dict(self.master_identity),
             request_id=str(uuid.uuid4()),
         )
-        if conn is not None and (hasattr(conn, "sendall") or hasattr(conn, "send")):
-            try:
-                send_msg(conn, message)
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                return {"status": "rejected", "reason": {"code": "socket_error", "message": "unable to send command_redirect"}, "message": message}
+        # A conexao recebida do peer nao e a sessao do Worker.
+        # Enviar diretamente pelo socket registrado para o Worker emprestado.
+        with self.registry._lock:
+            worker_conn = self.registry.active_sessions.get(worker_id)
+        if worker_conn is None:
+            return {"status": "rejected", "reason": {"code": "worker_disconnected", "message": "worker has no active session"}, "message": message}
+        try:
+            send_msg(worker_conn, message)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return {"status": "rejected", "reason": {"code": "socket_error", "message": "unable to send command_redirect to worker"}, "message": message}
         loan["redirect_target"] = dict(target_master_identity)
         loan["redirected_at"] = int(time.time() * 1000)
         self._loans[str(loan_id)] = loan
@@ -778,7 +793,7 @@ class PeerLoanManager:
     return_committed_loan = process_return_ack
 
 
-def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None) -> None:
+def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_identity: Dict[str, object], task_queue: MasterTaskQueue | None = None, peer_manager: PeerLoanManager | None = None) -> None:
     buffer = bytearray()
     write_lock = threading.Lock()
     session_stop = threading.Event()
@@ -1044,7 +1059,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                             send_msg(conn, build_protocol_error_message(message, master_identity, "invalid request_help payload"))
                         continue
 
-                    peer_manager = PeerLoanManager(registry, master_identity)
+                    if peer_manager is None: peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
                     decision = peer_manager.process_request_help(payload, source=source)
                     message_source = {
                         "group_label": str(master_identity["group_label"]),
@@ -1096,7 +1111,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         with write_lock:
                             send_msg(conn, build_protocol_error_message(message, master_identity, "invalid confirm_loan payload"))
                         continue
-                    peer_manager = PeerLoanManager(registry, master_identity)
+                    if peer_manager is None: peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
                     decision = peer_manager.confirm_loan(payload.get("loan_id"), requester_master=payload.get("requester_master"), request_id=request_id)
                     if decision["status"] == "accepted":
                         loan = peer_manager.get_loan_status(str(payload.get("loan_id")))
@@ -1125,12 +1140,11 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
                         )
                         redirect = peer_manager.issue_redirect_command(
                             str(payload.get("loan_id")),
-                            target_master=dict(payload.get("target_master") or source),
+                            target_master=dict(loan["requester_master"]),
                             reason="redirect to peer",
-                            conn=conn,
                         )
                         if redirect.get("status") == "accepted":
-                            log_event("ASD", "master", str(source["node_label"]), "command_redirect", request_id, "sent")
+                            log_event("ASD", "master", str(loan.get("worker", {}).get("node_label", "worker")), "command_redirect", request_id, "sent")
                     else:
                         response = build_protocol_error_message(message, master_identity, str(decision.get("reason", {}).get("message") or "invalid_confirm_loan"))
                         response["payload"]["error_code"] = str(decision.get("reason", {}).get("code") or "invalid_state")
@@ -1141,7 +1155,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                 elif msg_type == "get_loan_status":
                     payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
-                    peer_manager = PeerLoanManager(registry, master_identity)
+                    if peer_manager is None: peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
                     loan = peer_manager.get_loan_status(str(payload.get("loan_id")))
                     response = build_loan_status_message(
                         message,
@@ -1172,7 +1186,7 @@ def handle_client(conn: socket.socket, addr, registry: MasterRegistry, master_id
 
                 elif msg_type == "cancel_loan":
                     payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
-                    peer_manager = PeerLoanManager(registry, master_identity)
+                    if peer_manager is None: peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
                     decision = peer_manager.cancel_loan(str(payload.get("loan_id")), reason=str(payload.get("reason") or "cancelled"))
                     response = build_loan_status_message(
                         message,
@@ -2185,6 +2199,7 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
     monitor_stop = threading.Event()
     snapshot_stop = threading.Event()
     performance_stop = threading.Event()
+    peer_manager = PeerLoanManager(registry, master_identity, task_queue=task_queue)
     load_monitor = LoadMonitor(
         task_queue,
         saturation_threshold=int(master_identity.get("saturation_threshold", 10)),
@@ -2220,7 +2235,7 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
     try:
         while True:
             conn, addr = server.accept()
-            threading.Thread(target=handle_client, args=(conn, addr, registry, master_identity, task_queue), daemon=True).start()
+            threading.Thread(target=handle_client, args=(conn, addr, registry, master_identity, task_queue, peer_manager), daemon=True).start()
     except KeyboardInterrupt:
         pass
     finally:
@@ -2236,14 +2251,15 @@ def run_server(host: str, port: int, master_identity: Dict[str, object], *, snap
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Master node for NDJSON registration protocol")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=9000)
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--config", type=Path, default=CONFIG_PATH, help="Caminho do arquivo JSON de configuraÃ§Ã£o do Master")
     parser.add_argument("--snapshot-interval-seconds", type=float, default=0.0, help="Intervalo em segundos para imprimir o snapshot do Master; 0 desabilita")
     args = parser.parse_args()
 
-    config = load_or_create_config(CONFIG_PATH)
-    host = args.host if args.host != "127.0.0.1" else str(config.get("host", "127.0.0.1"))
-    port = args.port if args.port != 9000 else int(config.get("port", 9000))
+    config = load_or_create_config(args.config)
+    host = args.host if args.host is not None else str(config.get("host", "127.0.0.1"))
+    port = args.port if args.port is not None else int(config.get("port", 9000))
     run_server(host, port, config, snapshot_interval_seconds=args.snapshot_interval_seconds)
 
 
@@ -2251,5 +2267,3 @@ if __name__ == "__main__":
     main()
 
 #TODO:
-# MASTER ENVIA METRICAS AO COLETOR EXTERNO NA MESMA REDE (MAQUINAS DISTINTAS (PORTA 9100))
-# DEDUPLICAÇÃO TA OK.

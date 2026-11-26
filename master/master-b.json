@@ -1,0 +1,28 @@
+{
+  "group_label": "grupo_07",
+  "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+  "node_label": "grupo_07_master_02",
+  "node_role": "master",
+  "host": "127.0.0.1",
+  "port": 9001,
+  "uuid": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+  "label": "grupo_07_master_02",
+  "saturation_threshold": 10,
+  "release_threshold": 3,
+  "monitor_interval_ms": 1000,
+  "stable_samples": 3,
+  "collector_host": "10.62.220.21",
+  "collector_port": 9100,
+  "performance_interval_seconds": 10.0,
+  "min_home_workers": 0,
+  "peers": [
+    {
+      "node_role": "master",
+      "host": "127.0.0.1",
+      "group_label": "grupo_07",
+      "node_label": "grupo_07_master_01",
+      "port": 9000,
+      "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import socket
 import sys
 import threading
@@ -125,13 +125,13 @@ def test_peer_loan_messages_match_protocol_contract():
     requester = {
         "group_label": "p2p-cluster",
         "node_id": "11111111-1111-4111-8111-111111111111",
-        "node_label": "master-a",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
     }
     target = {
         "group_label": "p2p-cluster",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
     }
     worker = {
@@ -191,7 +191,7 @@ def test_peer_loan_messages_match_protocol_contract():
     redirected = build_command_redirect_message(
         committed,
         source=requester,
-        destination=target,
+        destination=worker, target_master=target,
         loan_id=loan_id,
         worker=worker,
         target_host="127.0.0.1",
@@ -229,13 +229,13 @@ def test_peer_loan_messages_reject_invalid_payloads_and_bad_states():
     requester = {
         "group_label": "p2p-cluster",
         "node_id": "11111111-1111-4111-8111-111111111111",
-        "node_label": "master-a",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
     }
     target = {
         "group_label": "p2p-cluster",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
     }
     worker = {
@@ -328,7 +328,7 @@ def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it():
     master_identity = {
         "group_label": "p2p-cluster",
         "node_id": "44444444-4444-4444-8444-444444444444",
-        "node_label": "master-a",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
         "host": "127.0.0.1",
         "port": 9001,
@@ -358,7 +358,7 @@ def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it():
     decision = manager.process_request_help(request, source={
         "group_label": "p2p-cluster",
         "node_id": "66666666-6666-4666-8666-666666666666",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
     })
 
@@ -413,7 +413,7 @@ def test_peer_loan_manager_redirects_only_committed_loan_to_valid_peer_master(tm
     }, source={
         "group_label": "p2p-cluster",
         "node_id": "66666666-6666-4666-8666-666666666666",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
     })
     assert decision["status"] == "accepted"
@@ -421,13 +421,16 @@ def test_peer_loan_manager_redirects_only_committed_loan_to_valid_peer_master(tm
     committed = manager.confirm_loan(decision["loan_id"], requester_master=peer_master, request_id=str(uuid.uuid4()))
     assert committed["status"] == "accepted"
 
-    socket_stub = object()
+    from unittest.mock import Mock
+    socket_stub = Mock()
     registry.active_sessions[worker["node_id"]] = socket_stub
 
     redirect = manager.issue_redirect_command(decision["loan_id"], target_master=peer_master, reason="redirect to peer")
     assert redirect["status"] == "accepted"
     assert redirect["message"]["type"] == "command_redirect"
-    assert redirect["message"]["destination"]["node_id"] == peer_master["node_id"]
+    assert redirect["message"]["destination"]["node_id"] == worker["node_id"]
+    assert redirect["message"]["payload"]["target_master"]["node_id"] == peer_master["node_id"]
+    socket_stub.sendall.assert_called_once()
     assert redirect["message"]["payload"]["loan_id"] == decision["loan_id"]
     assert redirect["message"]["payload"]["home_master"]["node_id"] == master_identity["node_id"]
 
@@ -436,7 +439,7 @@ def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_pat
     home_master = {
         "group_label": "p2p-cluster",
         "node_id": "11111111-1111-4111-8111-111111111111",
-        "node_label": "master-a",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
         "host": "127.0.0.1",
         "port": 9101,
@@ -444,7 +447,7 @@ def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_pat
     target_master = {
         "group_label": "p2p-cluster",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
         "host": "127.0.0.1",
         "port": 0,
@@ -498,7 +501,7 @@ def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_pat
     redirect = build_command_redirect_message(
         {"request_id": str(uuid.uuid4()), "source": home_master, "destination": target_master},
         source=home_master,
-        destination=target_master,
+        destination=worker_identity,
         loan_id=config["loan_id"],
         worker=worker_identity,
         target_host=target_master["host"],
@@ -541,7 +544,7 @@ def test_peer_loan_manager_processes_worker_return_and_closes_loan():
     manager = PeerLoanManager(registry, master_identity=master_identity)
 
     requester_master = {**master_identity, "port": 9005}
-    decision = manager.process_request_help({"requester_master": requester_master, "workers_needed": 1, "tasks_pending": 1}, source={"group_label": "p2p-cluster", "node_id": "66666666-6666-4666-8666-666666666666", "node_label": "master-b", "node_role": "master"})
+    decision = manager.process_request_help({"requester_master": requester_master, "workers_needed": 1, "tasks_pending": 1}, source={"group_label": "p2p-cluster", "node_id": "66666666-6666-4666-8666-666666666666", "node_label": "grupo_07_master_02", "node_role": "master"})
     assert decision["status"] == "accepted"
     assert decision["requester_master"]["node_id"] == requester_master["node_id"]
 
@@ -562,7 +565,7 @@ def test_worker_manager_processes_command_release_and_returns_to_home_master(tmp
     home_master = {
         "group_label": "p2p-cluster",
         "node_id": "11111111-1111-4111-8111-111111111111",
-        "node_label": "master-a",
+        "node_label": "grupo_07_master_01",
         "node_role": "master",
         "host": "127.0.0.1",
         "port": 9001,
@@ -570,7 +573,7 @@ def test_worker_manager_processes_command_release_and_returns_to_home_master(tmp
     target_master = {
         "group_label": "p2p-cluster",
         "node_id": "22222222-2222-4222-8222-222222222222",
-        "node_label": "master-b",
+        "node_label": "grupo_07_master_02",
         "node_role": "master",
         "host": "127.0.0.1",
         "port": 9002,
@@ -629,7 +632,11 @@ def test_peer_loan_manager_rejects_when_local_capacity_is_too_low():
             "port": 9100 + idx,
             "status": "available",
         })
-    manager = PeerLoanManager(registry, master_identity=master_identity)
+    task_queue = MasterTaskQueue()
+    for i in range(5):
+        task_queue.submit({"task_id": f"local-task-{i}"})
+
+    manager = PeerLoanManager(registry, master_identity=master_identity, task_queue=task_queue)
     decision = manager.process_request_help({
         "requester_master": master_identity,
         "workers_needed": 1,
