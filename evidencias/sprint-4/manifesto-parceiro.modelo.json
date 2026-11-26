@@ -1,0 +1,54 @@
+{
+  "version": "sd_2026_2_v1",
+  "group_label": null,
+  "nodes": [
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": null,
+      "node_id": null,
+      "node_label": null,
+      "node_role": "master",
+      "host": null,
+      "port": null
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": null,
+      "node_id": null,
+      "node_label": null,
+      "node_role": "worker",
+      "home_master": {
+        "group_label": null,
+        "node_id": null,
+        "node_label": null,
+        "node_role": "master",
+        "host": null,
+        "port": null
+      }
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": null,
+      "node_id": null,
+      "node_label": null,
+      "node_role": "worker",
+      "home_master": {
+        "group_label": null,
+        "node_id": null,
+        "node_label": null,
+        "node_role": "master",
+        "host": null,
+        "port": null
+      }
+    }
+  ],
+  "telemetry_destination": {
+    "version": "sd_2026_2_v1",
+    "group_label": "grupo_00",
+    "node_id": "c011ec70-0000-4000-8000-000000000001",
+    "node_label": "grupo_00_collector_01",
+    "node_role": "collector",
+    "host": "10.62.220.21",
+    "port": 9100
+  }
+}

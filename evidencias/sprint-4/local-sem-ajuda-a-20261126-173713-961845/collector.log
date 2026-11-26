@@ -1,0 +1,39 @@
+{
+  "version": "sd_2026_2_v1",
+  "group_label": "grupo_00",
+  "node_id": "c011ec70-0000-4000-8000-000000000001",
+  "node_label": "grupo_00_collector_01",
+  "node_role": "collector",
+  "host": "127.0.0.1",
+  "port": 55286,
+  "source_groups": [
+    "grupo_07"
+  ]
+}
+Destino dos masters: copie group_label, node_id, node_label e node_role acima para destination.
+Dados: C:\Users\mateus.cr\Desktop\atividade_1\evidencias\sprint-4\local-sem-ajuda-a-20261126-173713-961845\collector | 0 amostras ja registradas
+Aguardando performance_report. Ctrl+C encerra. Nao altera o firewall.
+2026-11-26T20:37:24.809726+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:24.855505+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:34.834058+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:34.880379+00:00 | grupo_07 | grupo_07_master_01 | fila=180 exec=2 ok=18 falhas=0 workers=2
+2026-11-26T20:37:44.845496+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:44.905631+00:00 | grupo_07 | grupo_07_master_01 | fila=161 exec=2 ok=37 falhas=0 workers=2
+2026-11-26T20:37:54.852201+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:54.915540+00:00 | grupo_07 | grupo_07_master_01 | fila=142 exec=2 ok=56 falhas=0 workers=2
+2026-11-26T20:38:04.876750+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:04.925374+00:00 | grupo_07 | grupo_07_master_01 | fila=122 exec=2 ok=76 falhas=0 workers=2
+2026-11-26T20:38:14.892436+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:14.953660+00:00 | grupo_07 | grupo_07_master_01 | fila=102 exec=2 ok=96 falhas=0 workers=2
+2026-11-26T20:38:24.898812+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:24.961097+00:00 | grupo_07 | grupo_07_master_01 | fila=82 exec=2 ok=116 falhas=0 workers=2
+2026-11-26T20:38:34.918024+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:34.981081+00:00 | grupo_07 | grupo_07_master_01 | fila=62 exec=2 ok=136 falhas=0 workers=2
+2026-11-26T20:38:44.946903+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:45.007982+00:00 | grupo_07 | grupo_07_master_01 | fila=42 exec=2 ok=156 falhas=0 workers=2
+2026-11-26T20:38:54.968274+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:55.030553+00:00 | grupo_07 | grupo_07_master_01 | fila=22 exec=2 ok=176 falhas=0 workers=2
+2026-11-26T20:39:04.996223+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:39:05.058191+00:00 | grupo_07 | grupo_07_master_01 | fila=2 exec=2 ok=196 falhas=0 workers=2
+2026-11-26T20:39:15.022188+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:39:15.071401+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=200 falhas=0 workers=2

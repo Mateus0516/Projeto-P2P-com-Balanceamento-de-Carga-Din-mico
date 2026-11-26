@@ -1,0 +1,33 @@
+{
+  "version": "sd_2026_2_v1",
+  "group_label": "grupo_00",
+  "node_id": "c011ec70-0000-4000-8000-000000000001",
+  "node_label": "grupo_00_collector_01",
+  "node_role": "collector",
+  "host": "127.0.0.1",
+  "port": 55278,
+  "source_groups": [
+    "grupo_07"
+  ]
+}
+Destino dos masters: copie group_label, node_id, node_label e node_role acima para destination.
+Dados: C:\Users\mateus.cr\Desktop\atividade_1\evidencias\sprint-4\local-com-ajuda-b-20261126-173713-772787\collector | 0 amostras ja registradas
+Aguardando performance_report. Ctrl+C encerra. Nao altera o firewall.
+2026-11-26T20:37:24.554675+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:24.555041+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:37:34.569785+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:37:34.572056+00:00 | grupo_07 | grupo_07_master_02 | fila=173 exec=3 ok=24 falhas=0 workers=3
+2026-11-26T20:37:44.580628+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:37:44.582501+00:00 | grupo_07 | grupo_07_master_02 | fila=143 exec=3 ok=54 falhas=0 workers=3
+2026-11-26T20:37:54.584714+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:37:54.598967+00:00 | grupo_07 | grupo_07_master_02 | fila=113 exec=3 ok=84 falhas=0 workers=3
+2026-11-26T20:38:04.611038+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:38:04.626164+00:00 | grupo_07 | grupo_07_master_02 | fila=83 exec=3 ok=114 falhas=0 workers=3
+2026-11-26T20:38:14.625696+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:38:14.641872+00:00 | grupo_07 | grupo_07_master_02 | fila=55 exec=3 ok=142 falhas=0 workers=3
+2026-11-26T20:38:24.648065+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:38:24.664027+00:00 | grupo_07 | grupo_07_master_02 | fila=26 exec=3 ok=171 falhas=0 workers=3
+2026-11-26T20:38:34.669585+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=1
+2026-11-26T20:38:34.671551+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=200 falhas=0 workers=3
+2026-11-26T20:38:44.682688+00:00 | grupo_07 | grupo_07_master_01 | fila=0 exec=0 ok=0 falhas=0 workers=2
+2026-11-26T20:38:44.684357+00:00 | grupo_07 | grupo_07_master_02 | fila=0 exec=0 ok=200 falhas=0 workers=2

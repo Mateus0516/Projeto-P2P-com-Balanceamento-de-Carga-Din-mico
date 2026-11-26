@@ -1,0 +1,50 @@
+{
+  "loans": [
+    {
+      "assignment_epoch": 2,
+      "closed_at": 1795725514907,
+      "committed_at": 1795725447702,
+      "created_at": 1795725447699,
+      "home_master": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "port": 55276
+      },
+      "loan_id": "3c61fe94-5792-498a-b2c8-8b2b84b8444b",
+      "loan_label": "grupo_07_master_01_loan_000001",
+      "loan_state": "closed",
+      "release_reason": "load_normalized",
+      "release_requested_at": 1795725514310,
+      "requester_master": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "port": 55277
+      },
+      "requester_source": null,
+      "reservation_deadline": 1795725462699,
+      "reservation_deadline_monotonic": 121141.21932,
+      "return_confirmed_at": 1795725514907,
+      "return_confirmed_by": "origin_master",
+      "target_master": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "port": 55277
+      },
+      "worker": {
+        "group_label": "grupo_07",
+        "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+        "node_label": "grupo_07_master_01_worker_02",
+        "node_role": "worker"
+      }
+    }
+  ]
+}

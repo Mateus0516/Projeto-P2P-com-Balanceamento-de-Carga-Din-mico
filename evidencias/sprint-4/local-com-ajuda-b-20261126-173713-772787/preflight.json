@@ -1,0 +1,98 @@
+[
+  {
+    "request": {
+      "version": "sd_2026_2_v1",
+      "type": "get_loan_status",
+      "message_id": "ab930f2a-043e-4717-8ec3-c3abfa574305",
+      "request_id": "82026aeb-6c53-4fa5-8de6-90104f73394c",
+      "timestamp_ms": 1795725434601,
+      "source": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master"
+      },
+      "destination": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master"
+      },
+      "payload": {
+        "loan_id": "229ef96e-cb58-420f-a40e-6cf600841e09"
+      }
+    },
+    "response": {
+      "version": "sd_2026_2_v1",
+      "type": "loan_status",
+      "message_id": "720f3ee6-f16f-45d1-88e6-add828bc00a3",
+      "request_id": "82026aeb-6c53-4fa5-8de6-90104f73394c",
+      "timestamp_ms": 1795725434625,
+      "source": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master"
+      },
+      "destination": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master"
+      },
+      "payload": {
+        "loan_id": "229ef96e-cb58-420f-a40e-6cf600841e09",
+        "loan_state": "unknown",
+        "loan": null
+      }
+    }
+  },
+  {
+    "request": {
+      "version": "sd_2026_2_v1",
+      "type": "get_loan_status",
+      "message_id": "8486ae45-ea7e-4d26-ba70-a84c36ae69fd",
+      "request_id": "3ce92539-1b7d-44b7-a9f8-7e291c1f81d6",
+      "timestamp_ms": 1795725434626,
+      "source": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master"
+      },
+      "destination": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master"
+      },
+      "payload": {
+        "loan_id": "45c35b45-9c30-473a-81f8-7884a7e26b20"
+      }
+    },
+    "response": {
+      "version": "sd_2026_2_v1",
+      "type": "loan_status",
+      "message_id": "a249a16d-f348-4411-af57-41f12a09aea4",
+      "request_id": "3ce92539-1b7d-44b7-a9f8-7e291c1f81d6",
+      "timestamp_ms": 1795725434627,
+      "source": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master"
+      },
+      "destination": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master"
+      },
+      "payload": {
+        "loan_id": "45c35b45-9c30-473a-81f8-7884a7e26b20",
+        "loan_state": "unknown",
+        "loan": null
+      }
+    }
+  }
+]

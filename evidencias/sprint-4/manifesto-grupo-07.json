@@ -1,0 +1,93 @@
+{
+  "version": "sd_2026_2_v1",
+  "group_label": "grupo_07",
+  "nodes": [
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+      "node_label": "grupo_07_master_01",
+      "node_role": "master",
+      "host": "127.0.0.1",
+      "port": 9000
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+      "node_label": "grupo_07_master_02",
+      "node_role": "master",
+      "host": "127.0.0.1",
+      "port": 9001
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "d3392d36-17df-4eee-b8d2-4d78f81f8311",
+      "node_label": "grupo_07_master_01_worker_01",
+      "node_role": "worker",
+      "home_master": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9000
+      }
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+      "node_label": "grupo_07_master_01_worker_02",
+      "node_role": "worker",
+      "home_master": {
+        "group_label": "grupo_07",
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9000
+      }
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "e7d496b7-2090-4eff-861c-af574656908f",
+      "node_label": "grupo_07_master_02_worker_01",
+      "node_role": "worker",
+      "home_master": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9001
+      }
+    },
+    {
+      "version": "sd_2026_2_v1",
+      "group_label": "grupo_07",
+      "node_id": "93f41d8c-ed8b-4dec-9112-2d1c08c8d60f",
+      "node_label": "grupo_07_master_02_worker_02",
+      "node_role": "worker",
+      "home_master": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 9001
+      }
+    }
+  ],
+  "telemetry_destination": {
+    "version": "sd_2026_2_v1",
+    "group_label": "grupo_00",
+    "node_id": "c011ec70-0000-4000-8000-000000000001",
+    "node_label": "grupo_00_collector_01",
+    "node_role": "collector",
+    "host": "10.62.220.21",
+    "port": 9100
+  }
+}

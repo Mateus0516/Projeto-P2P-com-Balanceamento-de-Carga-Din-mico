@@ -69,11 +69,13 @@ def _validate_node_identity(node: Any) -> bool:
     return True
 
 
-def validate_register_worker_payload(payload: Any) -> tuple[bool, str | None]:
+def validate_register_worker_payload(payload: Any, *, require_address: bool = True) -> tuple[bool, str | None]:
     if not isinstance(payload, dict):
         return False, "invalid payload"
 
-    required_fields = ("home_master", "assignment_epoch", "loan_id", "host", "port")
+    required_fields = ("home_master", "assignment_epoch", "loan_id")
+    if require_address:
+        required_fields += ("host", "port")
     missing = [field for field in required_fields if field not in payload]
     if missing:
         return False, f"missing required field(s): {', '.join(missing)}"
@@ -98,11 +100,11 @@ def validate_register_worker_payload(payload: Any) -> tuple[bool, str | None]:
         return False, "loan_id must be null or a non-empty string"
 
     host = payload.get("host")
-    if not isinstance(host, str) or not host.strip():
+    if "host" in payload and (not isinstance(host, str) or not host.strip()):
         return False, "host must be a non-empty string"
 
     port = payload.get("port")
-    if not isinstance(port, int) or isinstance(port, bool) or not (1 <= port <= 65535):
+    if "port" in payload and (type(port) is not int or not 1 <= port <= 65535):
         return False, "port must be an integer between 1 and 65535"
 
     return True, None
@@ -240,7 +242,7 @@ REPORT_HOME_LOAN_STATES = {"offered", "committed", "closed", "cancelled", "expir
 REPORT_TARGET_LOAN_STATES = {"waiting_worker", "active", "returning", "unknown"}
 
 
-def _validate_report_node(node: Any, role: str, *, address: bool = False) -> bool:
+def validate_official_node(node: Any, role: str, *, address: bool = False) -> bool:
     if not _validate_node_identity(node) or node["node_role"] != role:
         return False
     group = node["group_label"]
@@ -309,17 +311,17 @@ def validate_performance_report_payload(payload: Any) -> bool:
             return False
         if not isinstance(state, str) or state not in REPORT_HOME_LOAN_STATES | REPORT_TARGET_LOAN_STATES:
             return False
-        if not _validate_report_node(loan.get("worker"), "worker"):
+        if not validate_official_node(loan.get("worker"), "worker"):
             return False
         for field in ("home_master", "target_master"):
-            if not _validate_report_node(loan.get(field), "master", address=True):
+            if not validate_official_node(loan.get(field), "master", address=True):
                 return False
 
     neighbors = payload.get("neighbors")
     if not isinstance(neighbors, list):
         return False
     for neighbor in neighbors:
-        if not isinstance(neighbor, dict) or not _validate_report_node(neighbor.get("node"), "master", address=True):
+        if not isinstance(neighbor, dict) or not validate_official_node(neighbor.get("node"), "master", address=True):
             return False
         if neighbor.get("status") not in ("unknown", "available", "unavailable") or "last_seen_ms" not in neighbor:
             return False
@@ -553,7 +555,7 @@ def validate_response_accepted_payload(payload: Any) -> bool:
 def validate_response_rejected_payload(payload: Any) -> bool:
     if not isinstance(payload, dict) or set(payload) != {"reason"}:
         return False
-    return payload.get("reason") in {"high_load", "no_workers_available", "min_home_workers", "refused"}
+    return payload.get("reason") in ("high_load", "no_workers_available", "min_home_workers", "refused")
 
 
 def validate_confirm_loan_payload(payload: Any) -> bool:
@@ -598,15 +600,18 @@ def validate_return_ack_payload(payload: Any) -> bool:
 
 
 def validate_get_loan_status_payload(payload: Any) -> bool:
-    if not isinstance(payload, dict) or set(payload) != {"loan_id", "requester_master", "target_master"}:
+    if not isinstance(payload, dict) or "loan_id" not in payload:
         return False
-    return _validate_loan_id(payload.get("loan_id")) and _validate_master_identity(payload.get("requester_master")) and _validate_master_identity(payload.get("target_master"))
+    return _validate_loan_id(payload.get("loan_id")) and all(
+        field not in payload or _validate_master_identity(payload[field])
+        for field in ("requester_master", "target_master")
+    )
 
 
 def validate_loan_status_payload(payload: Any) -> bool:
     if not isinstance(payload, dict) or set(payload) != {"loan_id", "loan_state", "loan"}:
         return False
-    return _validate_loan_id(payload.get("loan_id")) and payload.get("loan_state") in VALID_LOAN_STATES and (payload.get("loan") is None or _validate_loan_ref(payload.get("loan")))
+    return _validate_loan_id(payload.get("loan_id")) and _validate_loan_state(payload.get("loan_state")) and (payload.get("loan") is None or _validate_loan_ref(payload.get("loan")))
 
 
 def validate_cancel_loan_payload(payload: Any) -> bool:
@@ -660,7 +665,7 @@ def validate_message(message: Any) -> bool:
         if message["destination"].get("node_role") != "worker":
             return False
 
-    if message["type"] in {"request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "register_temporary_worker", "get_loan_status", "loan_status", "cancel_loan"}:
+    if message["type"] in {"request_help", "response_accepted", "response_rejected", "confirm_loan", "loan_committed", "get_loan_status", "loan_status", "cancel_loan"}:
         if message["source"].get("node_role") != "master":
             return False
         if message["destination"].get("node_role") != "master":
@@ -711,7 +716,9 @@ def validate_message(message: Any) -> bool:
             return False
 
     if message["type"] == "register_worker":
-        ok, _ = validate_register_worker_payload(payload)
+        ok, _ = validate_register_worker_payload(
+            payload, require_address=not validate_official_node(message["source"], "worker"),
+        )
         if not ok:
             return False
 
@@ -768,7 +775,7 @@ def validate_message(message: Any) -> bool:
             return False
         source = message["source"]
         destination = message["destination"]
-        if not _validate_report_node(source, "master") or not _validate_report_node(destination, "collector"):
+        if not validate_official_node(source, "master") or not validate_official_node(destination, "collector"):
             return False
         if destination["node_id"] != COLLECTOR_NODE_ID or not validate_performance_report_payload(payload):
             return False
@@ -812,6 +819,11 @@ def validate_message(message: Any) -> bool:
 
     if message["type"] == "register_temporary_worker":
         if not validate_register_temporary_worker_payload(payload):
+            return False
+        loan = payload["loan"]
+        if not all(message["source"].get(key) == loan["worker"][key]
+                   and message["destination"].get(key) == loan["target_master"][key]
+                   for key in REQUIRED_NODE_FIELDS):
             return False
 
     if message["type"] == "command_release":

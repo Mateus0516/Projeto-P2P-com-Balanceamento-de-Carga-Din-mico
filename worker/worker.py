@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from protocol import (
+    REQUIRED_NODE_FIELDS,
+    build_register_temporary_worker_message,
     build_command_release_message,
     build_heartbeat_ack_message,
     build_heartbeat_message,
@@ -25,6 +27,7 @@ from protocol import (
     recv_msgs,
     send_msg,
     validate_message,
+    validate_official_node,
 )
 
 CONFIG_PATH = Path(__file__).with_name("config.json")
@@ -306,6 +309,21 @@ def compute_retry_delay(attempt_number: int) -> float:
     return min(0.5 * (2 ** (attempt_number - 1)), 5.0)
 
 
+def _same_node(left: dict, right: dict) -> bool:
+    return all(left.get(key) is not None and left[key] == right.get(key) for key in REQUIRED_NODE_FIELDS)
+
+
+def _save_worker_state(config: dict) -> None:
+    state_path = config.get("_state_path")
+    if state_path is None or not validate_official_node(config, "worker"):
+        return
+    path = Path(state_path)
+    temporary = path.with_name(f"{path.name}.tmp")
+    snapshot = {key: value for key, value in config.items() if key not in {"_state_path", "_pending_redirect"}}
+    temporary.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
 class WorkerSessionManager:
     def __init__(self, master_host: str, master_port: int, config: Dict[str, object], stop_event: threading.Event | None = None, retry_delay_factory=None):
         self.master_host = master_host
@@ -324,6 +342,7 @@ class WorkerSessionManager:
         self.pending_results: Dict[str, Dict[str, object]] = {}
         self.next_task_ready_at = 0.0
         self.result_retry_interval = 0.25
+        self._release_deadline: float | None = None
 
     @property
     def current_session(self) -> WorkerControlSession | None:
@@ -356,7 +375,7 @@ class WorkerSessionManager:
             self._task_polling_thread = thread
 
     def should_poll_for_task(self) -> bool:
-        if self.busy:
+        if self.busy or self._release_deadline is not None:
             return False
         if self.current_session is None or self.current_session.is_closed():
             return False
@@ -371,7 +390,7 @@ class WorkerSessionManager:
                 if session is None or session.is_closed():
                     return False
 
-                if self.busy or self.task_request_pending:
+                if self.busy or self.task_request_pending or self._release_deadline is not None:
                     return False
 
                 if time.monotonic() < self.next_task_ready_at:
@@ -456,6 +475,7 @@ class WorkerSessionManager:
                 "task_id": str(task_id),
                 "attempt_id": str(attempt_id),
                 "message": dict(task_result),
+                "master": load_master_identity(self.config),
                 "last_sent_at": time.monotonic(),
                 "send_count": 1,
                 "retry_session_id": id(self.current_session),
@@ -480,6 +500,11 @@ class WorkerSessionManager:
         for item in pending:
             message = item.get("message")
             if not isinstance(message, dict):
+                continue
+
+            if validate_official_node(self.config, "worker") and not _same_node(
+                message["destination"], load_master_identity(self.config)
+            ):
                 continue
 
             key = self._pending_result_key(
@@ -514,6 +539,134 @@ class WorkerSessionManager:
 
         return sent
 
+    def _reconcile_foreign_results(self) -> None:
+        with self._lock:
+            pending = list(self.pending_results.values())
+        current_master = load_master_identity(self.config)
+        for record in pending:
+            master = record["master"]
+            if self.stop_event.is_set() or _same_node(master, current_master):
+                continue
+            message = record["message"]
+            try:
+                with socket.create_connection((master["host"], master["port"]), timeout=5) as sock:
+                    buffer = bytearray()
+                    for _ in range(3):
+                        if self.stop_event.is_set():
+                            break
+                        send_msg(sock, message)
+                        deadline = time.monotonic() + 5.0
+                        acknowledged = False
+                        replies = []
+                        while time.monotonic() < deadline and not self.stop_event.is_set():
+                            sock.settimeout(max(0.001, deadline - time.monotonic()))
+                            try:
+                                replies = recv_msgs(sock, buffer)
+                            except TimeoutError:
+                                break
+                            if replies is None:
+                                break
+                            for reply in replies:
+                                if (
+                                    validate_message(reply)
+                                    and reply["type"] == "task_ack"
+                                    and reply["request_id"] == message["request_id"]
+                                    and _same_node(reply["source"], message["destination"])
+                                    and _same_node(reply["destination"], message["source"])
+                                    and reply["payload"]["task_id"] == record["task_id"]
+                                    and reply["payload"]["attempt_id"] == record["attempt_id"]
+                                ):
+                                    self._drop_pending_result(record["task_id"], record["attempt_id"])
+                                    log_event("ASD", self.config["node_label"], master["node_label"],
+                                              "task_ack", message["request_id"], reply["payload"]["reason"])
+                                    acknowledged = True
+                                    break
+                            if acknowledged:
+                                break
+                        if acknowledged or replies is None:
+                            break
+            except (OSError, ValueError):
+                # The current control session remains usable while this peer is down.
+                continue
+
+    def _run_result_reconciliation(self) -> None:
+        while not self.stop_event.wait(5):
+            self._reconcile_foreign_results()
+
+    def _move_to_master(self, master: dict) -> None:
+        # Only the reconnect loop opens the next session. The polling thread
+        # stops on EOF before that loop registers with the next master.
+        self.config["master"] = dict(master)
+        self.master_host = master["host"]
+        self.master_port = master["port"]
+        self.next_task_ready_at = 0.0
+        self._release_deadline = None
+        self._clear_task_request_pending()
+        try:
+            _save_worker_state(self.config)
+        except OSError as exc:
+            log_event("ASD", self.config["node_label"], master["node_label"], "worker_state", "-", str(exc))
+        finally:
+            self._set_session(None)
+
+    def _accept_official_redirect(self, message: dict) -> bool:
+        loan = message["payload"]["loan"]
+        master = load_master_identity(self.config)
+        home = self.config.get("home_master", master)
+        if (
+            not _same_node(message["destination"], self.config)
+            or not _same_node(loan["worker"], self.config)
+            or not _same_node(message["source"], home)
+            or not _same_node(loan["home_master"], home)
+            or _same_node(loan["target_master"], home)
+            or any(
+                not validate_official_node(ref, "master", address=True)
+                for ref in (loan["home_master"], loan["target_master"])
+            )
+        ):
+            return False
+        if self.config.get("_loan_ref") == loan and _same_node(master, loan["target_master"]):
+            return True
+        if self.busy or self.config.get("loan_id") is not None or not _same_node(master, home):
+            return False
+        if loan["assignment_epoch"] <= self.config.get("assignment_epoch", 0):
+            return False
+        self.config.update(
+            home_master=dict(loan["home_master"]), loan_id=loan["loan_id"],
+            assignment_epoch=loan["assignment_epoch"], _loan_ref=loan,
+        )
+        self._move_to_master(loan["target_master"])
+        log_event("ASD", self.config["node_label"], home["node_label"], message["type"], message["request_id"], "accepted")
+        return True
+
+    def _return_home(self) -> None:
+        # Any unacknowledged result stays associated with the former master.
+        self.current_task = None
+        self.busy = False
+        self._move_to_master(self.config["home_master"])
+
+    def _accept_official_release(self, message: dict) -> bool:
+        loan = self.config.get("_loan_ref")
+        payload = message["payload"]
+        if (
+            not loan
+            or not _same_node(message["source"], loan["target_master"])
+            or not _same_node(message["destination"], self.config)
+            or not _same_node(load_master_identity(self.config), loan["target_master"])
+            or payload["loan_id"] != loan["loan_id"]
+            or payload["assignment_epoch"] != loan["assignment_epoch"]
+            or payload["reason"] not in {"load_normalized", "shutdown"}
+        ):
+            return False
+        if self.busy:
+            if self._release_deadline is None:
+                self._release_deadline = time.monotonic() + 15.0
+        else:
+            self._return_home()
+        log_event("ASD", self.config["node_label"], message["source"]["node_label"],
+                  message["type"], message["request_id"], "accepted")
+        return True
+
     def process_inbound_message(self, message: dict) -> dict | bool:
         if not isinstance(message, dict) or not validate_message(message):
             return False
@@ -523,6 +676,8 @@ class WorkerSessionManager:
 
         msg_type = message.get("type")
         if msg_type == "command_redirect":
+            if validate_official_node(self.config, "worker"):
+                return self._accept_official_redirect(message)
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
             loan = payload.get("loan") if isinstance(payload.get("loan"), dict) else None
             if loan is not None:
@@ -584,6 +739,8 @@ class WorkerSessionManager:
             return True
 
         if msg_type == "command_release":
+            if validate_official_node(self.config, "worker"):
+                return self._accept_official_release(message)
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
             if not isinstance(payload, dict):
                 return False
@@ -655,9 +812,21 @@ class WorkerSessionManager:
             return True
 
         msg_type = message.get("type")
+        if validate_official_node(self.config, "worker") and (
+            not _same_node(message["source"], load_master_identity(self.config))
+            or not _same_node(message["destination"], self.config)
+        ):
+            return False
+
         if msg_type == "task_assignment":
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
             if not payload:
+                return False
+
+            if validate_official_node(self.config, "worker") and (
+                payload.get("assignment_epoch") != self.config.get("assignment_epoch", 0)
+                or payload.get("loan_id") != self.config.get("loan_id")
+            ):
                 return False
 
             self._clear_task_request_pending()
@@ -715,8 +884,12 @@ class WorkerSessionManager:
                 error_code=error_code,
             )
             self._remember_pending_result(task_result)
-            if self.current_session is not None:
-                self.current_session.send_message(task_result)
+            session = self.current_session
+            if session is not None:
+                try:
+                    session.send_message(task_result)
+                except OSError:
+                    session.close()
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "task_result", task_result["request_id"], status)
             return task_result
 
@@ -790,11 +963,16 @@ class WorkerSessionManager:
 
         def loop() -> None:
             while not self.stop_event.is_set() and not session.is_closed():
+                if self._release_deadline is not None and (
+                    not self.busy or time.monotonic() >= self._release_deadline
+                ):
+                    self._return_home()
+                    break
                 if self.busy:
                     if self.pending_results:
                         self.retransmit_pending_results(session)
                     try:
-                        message = session.wait_for_message(types={"task_ack"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
+                        message = session.wait_for_message(types={"task_ack", "command_release"}, timeout=max(0.5, interval_seconds), stop_event=self.stop_event)
                     except TimeoutError:
                         continue
                     self.process_inbound_message(message)
@@ -821,14 +999,28 @@ class WorkerSessionManager:
     def _connect_and_register(self) -> WorkerControlSession | None:
         if self.stop_event.is_set():
             return None
+        loan = self.config.get("_loan_ref")
+        temporary = loan is not None and _same_node(load_master_identity(self.config), loan["target_master"])
         try:
             session = open_control_session(self.master_host, self.master_port, timeout=1.0)
         except OSError:
+            if temporary:
+                self._return_home()
             return None
 
-        accepted = register_worker(self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event)
+        try:
+            accepted = register_worker(
+                self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event,
+            )
+        except OSError:
+            accepted = False
         if not accepted:
+            pending = self.config.pop("_pending_redirect", None)
             session.close()
+            if pending is not None:
+                self.process_inbound_message(pending)
+            elif temporary:
+                self._return_home()
             return None
         return session
 
@@ -848,7 +1040,8 @@ class WorkerSessionManager:
             self._set_session(session)
             self._start_heartbeat_for_session(session)
             self.retransmit_pending_results(session)
-            self.start_task_polling_loop(session)
+            connected_master = load_master_identity(self.config)
+            polling_thread = self.start_task_polling_loop(session)
             log_event("ASD", str(self.config.get("node_label", "worker-a")), "master", "reconnect", "-", "established")
 
             while not self.stop_event.is_set():
@@ -858,6 +1051,12 @@ class WorkerSessionManager:
                             self._current_session = None
                     break
                 self.stop_event.wait(0.1)
+            if validate_official_node(self.config, "worker") and session.is_closed():
+                if polling_thread is not None:
+                    polling_thread.join()
+                loan = self.config.get("_loan_ref")
+                if loan is not None and _same_node(connected_master, loan["target_master"]):
+                    self._return_home()
 
     def start(self) -> threading.Thread | None:
         if self.stop_event.is_set():
@@ -866,6 +1065,8 @@ class WorkerSessionManager:
             return self._loop_thread
         self._loop_thread = threading.Thread(target=self._run_reconnect_loop, daemon=True)
         self._loop_thread.start()
+        if validate_official_node(self.config, "worker"):
+            threading.Thread(target=self._run_result_reconciliation, daemon=True).start()
         return self._loop_thread
 
     def stop(self) -> None:
@@ -945,10 +1146,19 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
             "home_master": home_master_identity,
             "assignment_epoch": assignment_epoch,
             "loan_id": loan_id,
-            "host": str(config.get("host", "127.0.0.1")),
-            "port": int(config.get("port", 9101)),
         },
     }
+
+    if not validate_official_node(config, "worker"):
+        message["payload"].update(host=str(config.get("host", "127.0.0.1")), port=int(config.get("port", 9101)))
+
+    loan_ref = config.get("_loan_ref")
+    temporary = isinstance(loan_ref, dict) and _same_node(master_identity, loan_ref["target_master"])
+    returning = isinstance(loan_ref, dict) and _same_node(master_identity, loan_ref["home_master"])
+    if temporary:
+        message = build_register_temporary_worker_message(
+            message, message["source"], message["destination"], loan=loan_ref,
+        )
 
     session = control_session or open_control_session(master_host, master_port)
     try:
@@ -958,16 +1168,37 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
             log_event("ASD", node_label, "master", "registration_ack", message["request_id"], "timeout")
             return False
 
+        if validate_official_node(config, "worker") and (
+            not validate_message(reply)
+            or not _same_node(reply["source"], message["destination"])
+            or not _same_node(reply["destination"], message["source"])
+        ):
+            return False
         accepted = reply.get("payload", {}).get("accepted")
         reason = reply.get("payload", {}).get("reason")
         if accepted is True:
             confirmed_epoch = reply.get("payload", {}).get("assignment_epoch")
             if not isinstance(confirmed_epoch, int) or isinstance(confirmed_epoch, bool) or confirmed_epoch < assignment_epoch:
                 return False
+            if temporary and confirmed_epoch != assignment_epoch:
+                return False
+            if returning:
+                if confirmed_epoch != assignment_epoch + 1:
+                    return False
+                config["loan_id"] = None
+                config.pop("_loan_ref", None)
             config["assignment_epoch"] = confirmed_epoch
+            _save_worker_state(config)
             log_event("ASD", node_label, "master", reply["type"], reply["request_id"], "accepted")
             return True
 
+        if validate_official_node(config, "worker") and reason == "redirect_pending" and not temporary and not returning:
+            try:
+                config["_pending_redirect"] = session.wait_for_message(
+                    types={"command_redirect"}, timeout=5.0, stop_event=stop_event,
+                )
+            except TimeoutError:
+                pass
         log_event("ASD", node_label, "master", reply["type"], reply["request_id"], f"rejected:{reason or 'unknown'}")
         return False
     finally:
@@ -1092,6 +1323,7 @@ def main() -> None:
 
     config_path = args.config if args.config.is_absolute() else (Path.cwd() / args.config).resolve()
     config = load_or_create_config(config_path)
+    config["_state_path"] = str(config_path)
     if args.host is not None:
         config["host"] = args.host
     if args.port is not None:

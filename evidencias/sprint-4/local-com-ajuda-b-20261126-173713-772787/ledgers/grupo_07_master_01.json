@@ -1,0 +1,147 @@
+{
+  "loans": [
+    {
+      "assignment_epoch": 2,
+      "closed_at": 1795725514903,
+      "committed_at": 1795725447696,
+      "created_at": 1795725447667,
+      "home_master": {
+        "collector_group_label": "grupo_00",
+        "collector_host": "127.0.0.1",
+        "collector_node_id": "c011ec70-0000-4000-8000-000000000001",
+        "collector_node_label": "grupo_00_collector_01",
+        "collector_node_role": "collector",
+        "collector_port": 55278,
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "label": "grupo_07_master_01",
+        "loan_ledger_path": "C:\\Users\\mateus.cr\\Desktop\\atividade_1\\evidencias\\sprint-4\\local-com-ajuda-b-20261126-173713-772787\\ledgers\\grupo_07_master_01.json",
+        "min_home_workers": 1,
+        "monitor_interval_ms": 1000,
+        "negotiation_cooldown_ms": 5000,
+        "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+        "node_label": "grupo_07_master_01",
+        "node_role": "master",
+        "peers": [
+          {
+            "group_label": "grupo_07",
+            "host": "127.0.0.1",
+            "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+            "node_label": "grupo_07_master_02",
+            "node_role": "master",
+            "port": 55277
+          }
+        ],
+        "performance_interval_seconds": 10,
+        "port": 55276,
+        "release_threshold": 3,
+        "reservation_timeout_ms": 15000,
+        "response_timeout_ms": 5000,
+        "saturation_threshold": 10,
+        "stable_samples": 3,
+        "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1"
+      },
+      "loan_id": "3c61fe94-5792-498a-b2c8-8b2b84b8444b",
+      "loan_label": "grupo_07_master_01_loan_000001",
+      "loan_state": "closed",
+      "redirect_message": {
+        "destination": {
+          "group_label": "grupo_07",
+          "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+          "node_label": "grupo_07_master_01_worker_02",
+          "node_role": "worker"
+        },
+        "message_id": "03848ceb-77a9-4a12-8e97-d21f91e22148",
+        "payload": {
+          "loan": {
+            "assignment_epoch": 1,
+            "home_master": {
+              "group_label": "grupo_07",
+              "host": "127.0.0.1",
+              "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+              "node_label": "grupo_07_master_01",
+              "node_role": "master",
+              "port": 55276
+            },
+            "loan_id": "3c61fe94-5792-498a-b2c8-8b2b84b8444b",
+            "loan_label": "grupo_07_master_01_loan_000001",
+            "target_master": {
+              "group_label": "grupo_07",
+              "host": "127.0.0.1",
+              "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+              "node_label": "grupo_07_master_02",
+              "node_role": "master",
+              "port": 55277
+            },
+            "worker": {
+              "group_label": "grupo_07",
+              "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+              "node_label": "grupo_07_master_01_worker_02",
+              "node_role": "worker"
+            }
+          }
+        },
+        "request_id": "e8805e9c-2b5f-431b-a600-f648f2ad65a1",
+        "source": {
+          "group_label": "grupo_07",
+          "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+          "node_label": "grupo_07_master_01",
+          "node_role": "master"
+        },
+        "timestamp_ms": 1795725447699,
+        "type": "command_redirect",
+        "version": "sd_2026_2_v1"
+      },
+      "redirect_target": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "port": 55277
+      },
+      "redirected_at": 1795725447699,
+      "requester_master": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "port": 55277
+      },
+      "requester_source": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master"
+      },
+      "reservation_deadline": 1795725462669,
+      "reservation_deadline_monotonic": 121141.1873006,
+      "return_confirmed_at": 1795725514903,
+      "return_confirmed_by": "origin_master",
+      "target_master": {
+        "group_label": "grupo_07",
+        "host": "127.0.0.1",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "port": 55277
+      },
+      "worker": {
+        "assignment_epoch": 0,
+        "expected_heartbeat_request_id": null,
+        "expected_heartbeat_sequence": null,
+        "group_label": "grupo_07",
+        "heartbeat_misses": 0,
+        "host": "127.0.0.1",
+        "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+        "node_label": "grupo_07_master_01_worker_02",
+        "node_role": "worker",
+        "port": 0,
+        "registered_loan_id": null,
+        "releasing_loan_id": null,
+        "status": "available"
+      }
+    }
+  ]
+}

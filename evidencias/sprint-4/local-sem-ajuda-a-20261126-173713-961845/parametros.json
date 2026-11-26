@@ -1,0 +1,13 @@
+{
+  "base_git": "d1acba7ba05ab21b47ffcdae4e4d7a13f6f0099f",
+  "sources_sha256": {
+    "master/master.py": "f6cc1583ac5b44f67688c2f9cda4c4c830c1e9d6f626fce0bba858121ab051b3",
+    "worker/worker.py": "7c7a0f35912cd6986f81371a9a8c6bda60b87c3d814c6ecca63a54eb8e2b1689",
+    "protocol.py": "d5191e2e33d21292e2741328fe220104f612179dcb07db81ac1a374a40c855be"
+  },
+  "same_group_loopback": true,
+  "mode": "sem-ajuda",
+  "seed": 44,
+  "active_master": "a",
+  "collector_port": 55286
+}

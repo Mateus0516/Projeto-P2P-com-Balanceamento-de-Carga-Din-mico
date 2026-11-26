@@ -1,0 +1,33 @@
+{
+  "group_label": "grupo_07",
+  "node_id": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+  "node_label": "grupo_07_master_01_worker_02",
+  "node_role": "worker",
+  "host": "127.0.0.1",
+  "port": 9103,
+  "uuid": "6939b908-5d34-4f6f-8fde-95acd7f5bfa0",
+  "label": "grupo_07_master_01_worker_02",
+  "assignment_epoch": 0,
+  "loan_id": null,
+  "master": {
+    "group_label": "grupo_07",
+    "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "node_label": "grupo_07_master_01",
+    "node_role": "master",
+    "host": "127.0.0.1",
+    "port": 55284,
+    "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "label": "grupo_07_master_01"
+  },
+  "execution_delay_ms": 1000,
+  "home_master": {
+    "group_label": "grupo_07",
+    "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "node_label": "grupo_07_master_01",
+    "node_role": "master",
+    "host": "127.0.0.1",
+    "port": 55284,
+    "uuid": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+    "label": "grupo_07_master_01"
+  }
+}

@@ -1,0 +1,431 @@
+ASD | master | network | server_start | - | listening on 127.0.0.1:55285
+ASD | grupo_07_master_02_worker_02 | master | register_worker | 5054054b-77a7-49a8-a892-90cc4cf0cbfc | registered
+ASD | master | grupo_07_master_02_worker_02 | registration_ack | 5054054b-77a7-49a8-a892-90cc4cf0cbfc | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | a5dd8e6e-b64e-4eb8-8bbf-ec98021c91a2 | sent
+ASD | grupo_07_master_02_worker_01 | master | register_worker | a33225f7-6323-425b-a2b0-443387c8fd95 | registered
+ASD | master | grupo_07_master_02_worker_01 | registration_ack | a33225f7-6323-425b-a2b0-443387c8fd95 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 25171631-f68c-4626-8925-bc3cc8750016 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 9f48d137-bc4e-4bf3-9d5d-0d2afbc1e50d | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 292630ff-6dbb-4093-b3ab-f470b19000f9 | sent
+ASD | master | queue | load_state | 0 | released
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 41469646-1526-4e82-bcc0-a258b8406ba6 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | c67b8669-7adb-401a-b048-a8e6b4c856bb | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 9aed8166-7cc2-468f-a1e0-666e3904c757 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | dbce1c2a-417e-420f-b3a7-c65883edda99 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b6ad1a1a-61b7-4c28-ada0-337fae23808e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 0047e0fd-b461-47a1-9701-80f2920c58ab | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b9412528-8b24-4fa2-a5ad-10c22369b2c1 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 56db1f19-eada-4291-8cbf-6a493d3908d5 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 2b1d2207-048e-4ccc-b5e6-d1cfd8651783 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 830ddcaf-f6a7-428f-a662-901b5edaa75b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | e92ddea6-1f68-4c2d-8998-0deeffcc68f7 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | ab64f9f1-815e-4868-a4ad-ea2c751003a9 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 976d3a02-a9ac-48fe-85de-03ac32697bd1 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | d2a1b2c1-170a-4f17-852e-8b26816ff112 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 08ef020b-9184-4558-ba19-fbbea1bfca5a | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 616f0bd5-3156-41cb-bb4b-2e25bcb36253 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | efc0cb19-5f30-4b35-8998-5160164039d6 | sentASD | master | grupo_07_master_02_worker_01 | heartbeat | e19a1519-91cb-4608-9066-0233ad1db307 | sent
+
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | efc0cb19-5f30-4b35-8998-5160164039d6 | received
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 079f9213-7438-4ec3-97da-cb0d22237db5 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | e19a1519-91cb-4608-9066-0233ad1db307 | receivedASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | a3ad7bd8-5a4a-4905-a23e-3014c352be57 | sent
+
+ASD | master | grupo_07_master_02_worker_02 | no_task | 36c6faca-ecd0-40f7-8cd8-06ea670e937e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | b5cba1a5-8924-4281-a100-c143e32f0082 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 159ef099-58c2-4690-b738-60eef9dfc70f | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | af5d34fa-6648-4612-b398-27d9829a41df | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b4d304ed-63eb-4309-aba1-88d8ef42a198 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 47c80880-a098-4672-9871-57975c5d004e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6fcd623b-a034-43a8-867b-93e16b0da72d | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 7e19fcd8-1098-44df-92e4-e29d19cbdf07 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 3cd0c7c7-cd11-43c6-a5ec-d8cfac6de823 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 45178ada-9d5d-4770-959a-50d715bcd221 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 742dc33e-7cad-4ec4-826b-16838d4b7afa | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | fe61789a-da47-4080-a9aa-ffda4087a1fc | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 3d40389f-89fa-4c55-a7b3-4b1f6995a38c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 43ea3725-c72b-4b15-81c9-be849d1f38b9 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 75b3ccb7-19e3-4590-aefd-49813e070fdf | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 025e71f7-e1cc-4527-981c-96a77c6fd334 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 7b9fe250-c0cd-4003-9ab8-4861d4bc490e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | eadc9bc9-87de-4d50-a83c-7a61894f112e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 116fbba7-3bb0-43ff-b67b-8a35d47ac814 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 82ce3115-1a9f-46f6-971f-7446701dd69f | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 5a629433-b696-4b9d-8d8e-0f7a870cfff1 | sentASD | master | grupo_07_master_02_worker_02 | heartbeat | 0b764eec-22ff-4a97-9834-322be85493ae | sent
+
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | d6bd3227-ce4e-495a-8ced-b724a0442ad8 | sent
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 41f10486-5b4b-4c90-b708-4c92b741aab6 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 5a629433-b696-4b9d-8d8e-0f7a870cfff1 | received
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | 0b764eec-22ff-4a97-9834-322be85493ae | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | 0c12daa9-a190-4a96-a7e8-0b6c850f22fb | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 7043d83a-5315-4436-a3f8-5eb64d218852 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 27a887df-a0d5-4a77-b8f0-583909a53739 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | b1a6db0a-8bb9-4321-b0cb-958e8759ba59 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 525f955e-d1dc-4313-bfce-2ef6dd5672af | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 53ed367f-1efa-455f-8c49-153513d3c71e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 1e323271-739b-492d-b7d2-c8ea734f7cfb | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 0edf0093-1063-489f-809b-d1add7b2105b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 27669055-96ee-4b34-96cd-623ac13bf0bc | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | ca7d7f79-07fa-46fa-a671-8e639cb28e04 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 1b643b33-46e4-43c2-819f-d7164eeea568 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | c456cb83-45c8-4268-ac08-e07eeeef3e3c | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 3efa7646-71bb-41bb-a887-2d52056311ea | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 6862844c-b585-4f45-8ea5-5aa3ef46b0b6 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b2a29f6e-e127-45af-8923-c9de4925e1f0 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 208d6a5f-929f-4d6b-adbe-2f0fe8861955 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 89cb8cf9-21bd-4083-a702-a7383d5c913e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | b7076731-38ed-4c0d-b274-ea13e44f539a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 84fe5774-fdb7-4afe-961f-f036aa8b5ecd | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 8c415d8b-d86b-43f4-a62e-d057f43228f8 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 469d0443-709e-42c1-bd45-89612f02e230 | sentASD | master | grupo_07_master_02_worker_02 | heartbeat | a816edba-c6c7-4103-8a3e-8e4cbdaa0084 | sentASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 09228a46-d76e-4220-a215-8c9964dfbd9e | sent
+
+
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | a9493023-a2a7-464f-99c6-825796319dd9 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 469d0443-709e-42c1-bd45-89612f02e230 | received
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | a816edba-c6c7-4103-8a3e-8e4cbdaa0084 | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | 65672703-c3bb-411b-b176-958ab544c61a | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | cd1d49e8-2087-4c8b-b539-5413a6e1e0a6 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 3632aaac-0d96-49b7-9edf-abc3a4a2967e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 1828ee0d-19ca-4ac7-b277-d4e6f53e7ba6 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | f253a08f-3f0e-4053-9a09-94ec73dad7ba | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 312446a7-3ee4-40f3-9ea5-a44d86436603 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | ec18c310-c03c-4cfa-b459-f9c91a6820cf | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 194e978b-b909-426c-946a-0a09f567821e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | eea359a7-0b62-4b8b-8747-1b174b087eaf | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 202cbd82-52f0-4909-a6f1-1f36b6409c15 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 888c9a9a-1154-4952-ada0-72b05d15d4bf | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | b689d046-73ff-4179-a39b-249d74b3f839 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4c055c70-aaaf-4f52-ad24-3cfb5561a7e0 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | b7a80694-bd81-4a8f-8d01-46a1be298a45 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 1aadb8d0-1cc0-4ead-aca2-ccb264f7854c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | a79c5f8c-1ace-4b29-8553-bdeed77e368e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | ed3b0725-90ff-45aa-8668-24512c882552 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 8af2ea50-0318-4e9a-a843-a76fdcc5a6be | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | c932006b-3b07-4a8b-a48b-d52b821d5e3b | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | a3d2f2f5-6298-4bb7-886a-f2510e09a547 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 5165eb68-aabd-4413-bc15-f0243fc3bfca | sentASD | master | grupo_07_master_02_worker_02 | heartbeat | cdbd2a44-6e07-4755-9518-52ec74e9f06d | sent
+
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | bf8d00c0-95e9-460a-a986-703c9d4d1f16 | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 694da0ca-351c-4dd1-9075-ed702cd04986 | sentASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | cdbd2a44-6e07-4755-9518-52ec74e9f06d | received
+
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 5165eb68-aabd-4413-bc15-f0243fc3bfca | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | c63f33d3-324a-4afc-b086-f2563885d97b | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 8db6dc5f-7ae0-4ad6-986e-149cad2cf69e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 8e1a96dc-905c-41fb-bed4-a75b9e45f7d8 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | fac40b2d-9145-47ce-a896-996354a9fb24 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 0ad2d8ff-2384-46bc-88b9-5f1c024f39ff | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 16109fed-f34d-4892-aecd-8360a6543bae | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 688bd0bd-e4af-4006-bccc-93ca8c8bcac8 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | e4f0e81f-28d7-4874-95c0-5c3ebae84421 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | d58ed3ce-4102-45b4-b04c-280b7db097b1 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5e5fecc6-6748-430c-8ef8-cbf613121de2 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4de78355-1e4a-45f2-bbaf-31fe1d21a9a0 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 403a6622-6d0c-4f45-b3e8-3ccbbd18492b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 525e0756-d9ac-440f-bde0-a01c908246eb | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | ef6e1b63-5376-4678-aad3-0432d1064f78 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | e40be751-3821-40e4-9b97-2cd311265435 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | af84b4b7-3321-4d73-8292-46e25d13592d | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5be5fef2-7db3-4383-ae09-64f1c5b40188 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 144c693b-298f-4fb3-93fe-237590c7db06 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 62fe506d-a52c-48d4-95ca-2a8c42e5567e | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | faeb4240-a111-407a-9ab9-0f08aa9f9250 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | b015929b-5244-40d1-83a8-917e2bc2a12a | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 7e9a3dbf-078c-4b7a-97b7-f9352bcefcc0 | sentASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 337a0b65-f2d8-4e54-89e4-864c8e29643c | sent
+
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 349f1ff5-54dc-4b6c-ba1a-5eb39659dcd0 | sentASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | b015929b-5244-40d1-83a8-917e2bc2a12a | received
+
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 7e9a3dbf-078c-4b7a-97b7-f9352bcefcc0 | received
+ASD | master | grupo_07_master_02_worker_01 | no_task | b7dae8d5-6fbb-4512-b2b0-472255843b0a | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | a6fc3b1a-a84d-479c-b62d-5ca95d448d4e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 29c65cf3-b96d-4e70-840e-35c75ae720f4 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 103c2a18-2f83-458d-9566-2199d8ef80c5 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4bac98b1-a8ca-43b2-958f-eb0afa87971e | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6b453de8-764e-4047-8c6e-09ac07113b72 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 9b3b60ea-4954-485c-9363-28fbc357f1ff | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 7aab5ea6-e050-4e8a-86e7-e654932d3e2e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | efd40afd-0be7-48c6-ab0c-b6f56fd34853 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 410350c6-e0fa-4a51-aaa5-b8653a863cb3 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | fb588676-c120-442a-86ef-68bb1bcae090 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 40fda14f-ac34-4153-9c24-0dcb4132c9f7 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6a7d6991-d9ff-4817-828b-ef1258a3d909 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 3fa77d39-2730-418c-a2cf-4601f501536a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | e59c8f5b-0f5d-4e60-9668-093be36b3ccd | sentASD | master | grupo_07_master_02_worker_02 | no_task | e25c2360-dd6f-421a-a887-6fed44a52e90 | sent
+
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4a837ec4-fe0f-4ea9-8b09-51e2792bdefe | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | ee883a44-6b7a-4917-92bf-493d2e7c45fd | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 1012c9a0-4d4a-4fb8-ae24-80eccdfe5dd9 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 8f98374d-4a48-4b7d-8cfe-74bc90c4c059 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 2324e3c0-f01a-47ff-9744-c5b1352ec88a | sentASD | master | grupo_07_master_02_worker_02 | heartbeat | eaa1b825-ee90-4174-95ac-1ad54e0bf243 | sent
+
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 3e60961b-7ecf-450d-95b8-7fa27114f9ca | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 8b6d3267-11fe-4d83-8b94-c7051993e817 | sent
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | eaa1b825-ee90-4174-95ac-1ad54e0bf243 | received
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 2324e3c0-f01a-47ff-9744-c5b1352ec88a | received
+ASD | master | grupo_07_master_02_worker_01 | no_task | 53e251b6-a61a-416b-9116-00eefe3c0b47 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | c09e2a35-c301-4f01-8d7e-bdd6f867179c | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | ea315bde-4919-4cb0-83b9-d1c26d54343e | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 03575e7b-d46b-4407-8a5e-69264a84dd6a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 44fed0d7-3a10-4f71-88b1-4a0a893291b1 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | c7202d4a-244a-43ed-8875-11daf6f9d1e5 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | a995f27e-c8ed-4b86-9db2-64443f527825 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 89d80dac-1f51-4dad-8aea-846984719bff | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 79e71f9f-b260-4fca-a594-112056630b7f | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | a028ee15-b3b3-4138-b555-a5d74636e939 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | baa8cda8-5116-4e33-9571-db99985d0347 | sentASD | master | grupo_07_master_02_worker_01 | no_task | 602c9e0f-dc51-43dc-9a95-ae0bc651ec7d | sent
+
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4950d0d6-b951-4a43-8885-1b4b4fdf2587 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | a0615169-ce0d-418f-a6f6-b0b196837fb1 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | b2343b9b-8ae7-4bd9-9fef-2c111f1d99cd | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 63cbd1f7-9abc-4e34-997a-c3ee71421460 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | df091e1f-34ce-4820-9400-0e50fa752214 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6c6d9ce3-e9c0-4438-ad99-69957d515bd6 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 17182245-9856-4ff3-85f3-83ffbdeb74f7 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | e33f1d2f-4f16-4040-acbf-8fcc548e96f4 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | cda29fdb-b4c5-4240-9117-bf972881213b | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | cda29fdb-b4c5-4240-9117-bf972881213b | received
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | 415fdb0b-0530-4f31-98af-db56f3a9e881 | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 021837c4-ba09-4bc4-b7e9-f33b948b48b8 | sentASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 75b99d99-6831-47c6-bf91-7364dce3270b | sent
+
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | 415fdb0b-0530-4f31-98af-db56f3a9e881 | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6ee66753-ee13-44ee-a1c0-a5aeee312095 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 617dc18b-eceb-4a50-a306-9605d71809da | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | abbf9737-bf7a-4680-b028-c255ac2a678c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 9a07f223-6a4c-4b9d-baf6-c9a3559d04b6 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4bf9c383-2196-4c81-a995-ea2ba29671fb | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | ea9dc752-ee48-4dd3-a86c-6a235b8ed52f | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 59a164a4-3ffa-40e7-84e4-a6c906e99fd3 | sentASD | master | grupo_07_master_02_worker_01 | no_task | 4277ae11-bfb6-46e2-a798-fdfb87fda2b8 | sent
+
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b9fd8ec8-8fcc-40aa-aae3-8203bd6452da | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 819b4f51-d48e-4095-a320-d0752971a2f0 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 6f4a1edb-3b06-4cbf-a747-d1ba57e96f3e | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 7a9ae698-80e2-4550-a4ee-3d51165d3d3d | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 7ec7b8e8-7fa8-4ad0-8ebe-5d611e8fd45c | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 77df2c08-2937-4f4c-9e60-91ffab2b1c6f | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | f04616ee-50ad-4fdc-813c-6d52f8cbc81c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 216805fe-7f39-496d-970e-a9d65b94776a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 74287aef-1a7f-4231-ad5f-d8a890d0e5fb | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 965c2465-0d81-485b-8569-d595479e316d | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | f9f03702-2962-47b4-a354-06474acf9b9f | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 8cc7d242-b6e4-4a42-aa0c-5d6a288ecd89 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | fc544fbf-0c40-417b-b97b-6821ec9669da | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | fc544fbf-0c40-417b-b97b-6821ec9669da | received
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | 9ef43f56-2929-40bd-bd0a-f353e1148733 | sent
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 094b1b23-d4f6-4441-b2e6-012c91a446bc | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | e3a8b5ad-c5eb-4017-b638-097694aa6811 | sent
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | 9ef43f56-2929-40bd-bd0a-f353e1148733 | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | a08d2a39-e44e-4d85-94b7-73cff225e2f6 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 7aa4af51-4b6b-49d1-a1ef-bb1a69cd837e | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 2030e181-1ce5-4969-a5e7-be0dba2aa7e3 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 72892e17-c789-41ab-9c48-a76005fc8ef2 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 1f6faa94-4b44-4624-a5ac-6332aefd54a8 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 55b36ce6-311d-477e-888b-6abc14b8b36c | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 585b046d-99e1-4635-aa99-2e311dfa076f | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 28a5f660-3e4a-4237-a19f-075e98738949 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4f338f85-c5d0-4701-a461-3d4f3193f853 | sentASD | master | grupo_07_master_02_worker_02 | no_task | 90fca754-c917-4b93-9ff9-d1843a9c9a2f | sent
+
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | e4fb866a-1e46-497f-8fd7-9d7a35380352 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 705754cc-09d1-4850-a95f-eba551664154 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 235d6f3f-2cde-4bd9-8223-ca1d64a58da5 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5318855f-b6c6-4105-b2ea-f9d2392664c9 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5a973fe2-5436-4cd5-8e66-dc33fdb36a19 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | e372ed1f-0cf5-4fed-9e74-6708e3928596 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 1522a74f-558f-469a-a0bb-709d1bcbb112 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 1f222033-06c4-4590-84f2-072713206d65 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | e60f1749-2c52-48b7-8e09-d7cc3663bbaf | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 8e1e5d52-a80a-410c-9c91-9255cbf4a74b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | e0111f7b-33ff-496d-af78-6bd2819fe170 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | e0111f7b-33ff-496d-af78-6bd2819fe170 | received
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | 5855a3e2-c56f-4775-bc14-59e87c94ebca | sent
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | 5855a3e2-c56f-4775-bc14-59e87c94ebca | receivedASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 5b909885-90d6-41bb-9d9d-c81aa8182d0c | sent
+
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | be92f601-41c7-4de9-9c37-f643ac8bc554 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 8135f265-901f-41c1-995c-51a6cfe05472 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | a7ea8de9-e2fb-4c69-b436-557f8db1ac53 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | a56d668e-1a3e-47ec-a476-e84908249419 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 079d5d43-3d32-40db-b670-8781fa364e49 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 7f9bf860-5670-4cc0-8ac4-ac5c415ad2db | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 2ccb8cf3-9c8f-4360-b845-ade2928a554a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 1afaf743-3ce8-4858-91dd-70cdf7eaccea | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5368bff7-f121-4973-a815-4f6aebdfe51c | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4e775c14-298f-4410-b78a-c773bdc77622 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 870a376f-8032-4744-aa66-00d9efdb2878 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 412885b2-bc29-4339-a421-b47af3984ffe | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | c39858fb-fbae-40dc-902e-3d3911f4551b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 2cf62b28-f450-4b39-a722-b587a21df7cc | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 1c53883b-36fd-4b01-8f10-6e70d7f511c9 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | cfbcc829-f3f0-45ea-9da9-93a6e4b4c05d | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 037ee6f3-bc79-449d-bfb0-9cb41727698f | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5182e062-9011-4e69-8b60-f5d5083715ea | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | fe93ea8c-fa25-4d5f-9805-fa2613dc6dcd | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 3be4f60d-3c01-4185-8749-29a7d9e50bc9 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 0b152baf-cfed-4b6c-a3ed-d1d7b84e4d2b | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 96cfcf37-be8e-4df3-b25b-2de76524bdc2 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 96cfcf37-be8e-4df3-b25b-2de76524bdc2 | received
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | b1e21cee-c342-4a3c-bd82-2b393e66a56c | sent
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 7499f2e2-3655-47da-bcf8-b8f0a94fad7e | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 93364603-b7fc-4a57-bcfc-18d090640e5c | sent
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | b1e21cee-c342-4a3c-bd82-2b393e66a56c | received
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | a881c9d6-85b9-4f93-9242-b8ba7ef051d6 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | c41568bc-5d0c-45bd-9d28-ff84e36cb037 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | f6bad691-d8c5-4aad-b559-a96635eede5f | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | d2d7daeb-438c-4458-8b34-e8f5e7abd2d2 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | f40145ea-5f2b-4434-ae56-04a1e8eb197f | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 5e103696-ef87-439e-9fbe-5c6164b8cee8 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | fba30d86-21b5-47ae-ba33-c2a2f210753e | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4303cba7-5058-41e4-a937-a3f371b3851b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | b02b2a79-d65d-488a-b9f6-f0daa2152314 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 47c01be0-9b4c-413f-9920-99c3eca24e52 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | a2425ef7-bd6f-4ceb-a6ea-7258b5779fac | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4258f659-aa97-47d5-80a9-e8d0ae704067 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | de5ea01b-7309-4450-b5c6-afc74b4702cc | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 4b0821f2-4a38-447d-b315-194d73cbb368 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 07cc088b-508f-4d1d-874c-46d7dd1286f5 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 6eaba319-7c61-483c-9c29-87634a6355ab | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 2ed61fc5-9640-4422-8fc6-ec4bfb59894c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | fe3b694c-9fc0-4d6a-8fef-f1b7cc2b9605 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | heartbeat | 831c7943-7fd4-4cbb-9a7d-4334be632835 | sent
+ASD | grupo_07_master_02_worker_01 | master | heartbeat_ack | 831c7943-7fd4-4cbb-9a7d-4334be632835 | received
+ASD | master | grupo_07_master_02_worker_02 | heartbeat | 3cf09cb5-2570-493b-a967-b29063cc3cfe | sent
+ASD | master | grupo_07_master_02_worker_01 | heartbeat_ack | 4947a025-6ee4-4654-a78b-76be64856391 | sent
+ASD | master | grupo_07_master_02_worker_02 | heartbeat_ack | 853873f8-f0ac-49f6-890d-8eafbfff5db7 | sent
+ASD | grupo_07_master_02_worker_02 | master | heartbeat_ack | 3cf09cb5-2570-493b-a967-b29063cc3cfe | received
+ASD | master | grupo_07_master_02_worker_02 | no_task | 2a37b008-b9ae-4326-9bc3-4cee9c6cec3c | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 7e25942c-15e5-4b1d-880b-269efa86c870 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 884432fc-5a1c-467e-b26c-bbdd3026d88b | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | d5a388e3-fee0-4c2b-89ee-c4b778c1234a | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | d7db36f4-6794-45ba-9a9b-dce48d56407d | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | ff778707-994f-4c88-b4e3-997cd29caca7 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 11aa3a1e-4516-46f4-889a-dace8751c3a2 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 370e2efe-93ed-4ba7-bddd-f501c2992d4d | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | b6525d2f-488b-480f-9bb8-00b5bcb03102 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | c64a78fb-73ce-4a57-822d-3b47508b42e2 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 67472734-622a-4b01-8198-c1e0ea3347bb | sentASD | master | grupo_07_master_02_worker_01 | no_task | b8d74938-e07e-4ff5-a654-04f8b3eb9055 | sent
+
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 47cbc96d-3ae1-46a9-98c5-450239ed77da | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 7141d368-666e-41cf-80e1-b48c52450acb | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 4d5a139d-e125-4262-94fc-1943f8580ed9 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 20da4447-5bfe-43d2-a75c-3cf2bc5a340b | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_02 | no_task | 406a9aa8-c122-4684-b1b5-70002df0dd19 | sent
+ASD | master | grupo_07_master_02_worker_01 | no_task | 71a494dc-83a0-4be8-b73a-840d8d0eb36c | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | master | grupo_07_master_02_worker_01 | no_task | 55f986ec-e46e-4721-b6bc-d82392b34bd4 | sent
+ASD | master | grupo_07_master_02_worker_02 | no_task | 28a96c18-6ab2-460e-827a-7c515e40ca60 | sent
+MASTER SNAPSHOT total=0 completed=0 pending=0 running=0 failed=0 timeout_attempts=0 recovered_after_timeout=0 tasks_with_multiple_attempts=0 pending_ids=[] running_ids=[] failed_ids=[]
+ASD | grupo_07_master_02_worker_02 | master | heartbeat | socket error | unavailable
+ASD | grupo_07_master_02_worker_01 | master | heartbeat | socket error | unavailable

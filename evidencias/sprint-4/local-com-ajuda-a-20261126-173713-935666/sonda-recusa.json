@@ -1,0 +1,55 @@
+{
+  "request": {
+    "version": "sd_2026_2_v1",
+    "type": "request_help",
+    "message_id": "36d2f4f2-7fc6-4d4e-97e8-4b562ba7dba0",
+    "request_id": "73593c93-a67c-4488-bb2f-c8ec848c63ad",
+    "timestamp_ms": 1795725448912,
+    "source": {
+      "group_label": "grupo_07",
+      "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+      "node_label": "grupo_07_master_02",
+      "node_role": "master"
+    },
+    "destination": {
+      "group_label": "grupo_07",
+      "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+      "node_label": "grupo_07_master_01",
+      "node_role": "master"
+    },
+    "payload": {
+      "requester_master": {
+        "group_label": "grupo_07",
+        "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+        "node_label": "grupo_07_master_02",
+        "node_role": "master",
+        "host": "127.0.0.1",
+        "port": 55282
+      },
+      "workers_needed": 1,
+      "tasks_pending": 10
+    }
+  },
+  "response": {
+    "version": "sd_2026_2_v1",
+    "type": "response_rejected",
+    "message_id": "78d52460-3fc2-407f-892f-10a5fbcf47d9",
+    "request_id": "73593c93-a67c-4488-bb2f-c8ec848c63ad",
+    "timestamp_ms": 1795725448913,
+    "source": {
+      "group_label": "grupo_07",
+      "node_id": "cf662f72-9291-48fd-bc0e-591eea76e6b1",
+      "node_label": "grupo_07_master_01",
+      "node_role": "master"
+    },
+    "destination": {
+      "group_label": "grupo_07",
+      "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",
+      "node_label": "grupo_07_master_02",
+      "node_role": "master"
+    },
+    "payload": {
+      "reason": "no_workers_available"
+    }
+  }
+}

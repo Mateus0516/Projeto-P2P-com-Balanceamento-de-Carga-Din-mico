@@ -1,0 +1,12 @@
+{
+  "version": "sd_2026_2_v1",
+  "group_label": "grupo_00",
+  "node_id": "c011ec70-0000-4000-8000-000000000001",
+  "node_label": "grupo_00_collector_01",
+  "node_role": "collector",
+  "host": "127.0.0.1",
+  "port": 55283,
+  "source_groups": [
+    "grupo_07"
+  ]
+}
