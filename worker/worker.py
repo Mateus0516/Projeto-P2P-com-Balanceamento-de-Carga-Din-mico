@@ -524,11 +524,21 @@ class WorkerSessionManager:
         msg_type = message.get("type")
         if msg_type == "command_redirect":
             payload = message.get("payload", {}) if isinstance(message.get("payload", {}), dict) else {}
-            target_master = payload.get("target_master")
-            target_host = str(payload.get("target_host") or self.master_host)
-            target_port = int(payload.get("target_port") or self.master_port)
+            loan = payload.get("loan") if isinstance(payload.get("loan"), dict) else None
+            if loan is not None:
+                target_master = loan.get("target_master")
+                home_master = loan.get("home_master")
+                loan_id = loan.get("loan_id")
+                assignment_epoch = loan.get("assignment_epoch")
+            else:
+                target_master = payload.get("target_master")
+                home_master = payload.get("home_master") or payload.get("home")
+                loan_id = payload.get("loan_id")
+                assignment_epoch = payload.get("assignment_epoch")
+            target_host = str((target_master or {}).get("host") or payload.get("target_host") or self.master_host)
+            target_port = int((target_master or {}).get("port") or payload.get("target_port") or self.master_port)
             current_master = dict(self.config.get("master") or {}) if isinstance(self.config.get("master"), dict) else {}
-            home_master = dict(self.config.get("home_master") or current_master or {}) if isinstance(self.config.get("home_master"), dict) else (dict(current_master) if current_master else {})
+            home_master = dict(home_master or self.config.get("home_master") or current_master or {})
             if isinstance(target_master, dict) and target_master.get("node_role") == "master":
                 self.config["home_master"] = dict(home_master or current_master or target_master)
                 self.config["master"] = {
@@ -555,8 +565,10 @@ class WorkerSessionManager:
 
             self.master_host = target_host
             self.master_port = target_port
-            self.config["assignment_epoch"] = int(payload.get("assignment_epoch", self.config.get("assignment_epoch", 0)))
-            self.config["loan_id"] = payload.get("loan_id")
+            self.config["assignment_epoch"] = int(assignment_epoch if isinstance(assignment_epoch, int) else self.config.get("assignment_epoch", 0))
+            self.config["loan_id"] = str(loan_id) if loan_id is not None else None
+            if loan is not None:
+                self.config["loan_label"] = str(loan.get("loan_label", ""))
 
             session = open_control_session(self.master_host, self.master_port, timeout=1.0)
             accepted = register_worker(self.master_host, self.master_port, self.config, control_session=session, stop_event=self.stop_event)
@@ -597,9 +609,9 @@ class WorkerSessionManager:
             self.task_request_pending = False
             self.current_task = None
             self.next_task_ready_at = time.monotonic()
-            self.config["assignment_epoch"] = 0
             self.config["loan_id"] = None
 
+            self.config["master"] = dict(home_master)
             self.master_host = str(home_master.get("host") or self.master_host)
             self.master_port = int(home_master.get("port") or self.master_port)
 
@@ -629,8 +641,10 @@ class WorkerSessionManager:
                     "node_role": str(home_master.get("node_role", "master")),
                 },
                 loan_id=str(payload.get("loan_id")),
+                loan_label=str(self.config.get("loan_label") or f"{str(home_master.get('node_label', 'master')).lower()}_loan_{release_epoch:06d}"),
                 worker=worker_identity,
                 assignment_epoch=int(payload.get("assignment_epoch", 0)),
+                loan_state="closed",
             )
             if session is not None:
                 try:
@@ -664,6 +678,10 @@ class WorkerSessionManager:
             start = int(self.current_task["parameters"].get("start", 0))
             end = int(self.current_task["parameters"].get("end", 0))
             try:
+                delay_ms = max(0, int(self.config.get("execution_delay_ms", 0)))
+                if delay_ms:
+                    if self.stop_event.wait(delay_ms / 1000.0):
+                        return False
                 total = sum_range(start, end)
                 status = "ok"
                 result = {"sum": total}
@@ -943,6 +961,10 @@ def register_worker(master_host: str, master_port: int, config: Dict[str, object
         accepted = reply.get("payload", {}).get("accepted")
         reason = reply.get("payload", {}).get("reason")
         if accepted is True:
+            confirmed_epoch = reply.get("payload", {}).get("assignment_epoch")
+            if not isinstance(confirmed_epoch, int) or isinstance(confirmed_epoch, bool) or confirmed_epoch < assignment_epoch:
+                return False
+            config["assignment_epoch"] = confirmed_epoch
             log_event("ASD", node_label, "master", reply["type"], reply["request_id"], "accepted")
             return True
 

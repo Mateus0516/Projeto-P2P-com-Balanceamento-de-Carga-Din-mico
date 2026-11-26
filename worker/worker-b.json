@@ -9,7 +9,7 @@
   "label": "worker-b",
   "assignment_epoch": 0,
   "loan_id": null,
-  "execution_delay_ms": 0,
+  "execution_delay_ms": 1000,
   "master": {
     "group_label": "grupo_07",
     "node_id": "b711828d-b138-4ea2-b18d-5a3ff7c2c578",

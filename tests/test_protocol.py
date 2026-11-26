@@ -324,7 +324,7 @@ def test_peer_loan_messages_reject_invalid_payloads_and_bad_states():
     assert validate_message(invalid_target_master) is False
 
 
-def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it():
+def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it(tmp_path):
     master_identity = {
         "group_label": "p2p-cluster",
         "node_id": "44444444-4444-4444-8444-444444444444",
@@ -348,7 +348,7 @@ def test_peer_loan_manager_reserves_an_idle_worker_and_confirms_it():
         "status": "available",
     }
     registry.upsert_worker(worker)
-    manager = PeerLoanManager(registry, master_identity=master_identity)
+    manager = PeerLoanManager(registry, master_identity=master_identity, ledger_path=tmp_path / "loan_ledger.json")
 
     request = {
         "requester_master": master_identity,
@@ -429,10 +429,10 @@ def test_peer_loan_manager_redirects_only_committed_loan_to_valid_peer_master(tm
     assert redirect["status"] == "accepted"
     assert redirect["message"]["type"] == "command_redirect"
     assert redirect["message"]["destination"]["node_id"] == worker["node_id"]
-    assert redirect["message"]["payload"]["target_master"]["node_id"] == peer_master["node_id"]
+    assert redirect["message"]["payload"]["loan"]["target_master"]["node_id"] == peer_master["node_id"]
     socket_stub.sendall.assert_called_once()
-    assert redirect["message"]["payload"]["loan_id"] == decision["loan_id"]
-    assert redirect["message"]["payload"]["home_master"]["node_id"] == master_identity["node_id"]
+    assert redirect["message"]["payload"]["loan"]["loan_id"] == decision["loan_id"]
+    assert redirect["message"]["payload"]["loan"]["home_master"]["node_id"] == master_identity["node_id"]
 
 
 def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_path):
@@ -521,7 +521,7 @@ def test_worker_session_manager_redirects_to_target_master_and_registers(tmp_pat
     assert seen["accepted"] is True
 
 
-def test_peer_loan_manager_processes_worker_return_and_closes_loan():
+def test_peer_loan_manager_processes_worker_return_and_closes_loan(tmp_path):
     master_identity = {
         "group_label": "p2p-cluster",
         "node_id": "77777777-7777-4777-8777-777777777777",
@@ -541,7 +541,7 @@ def test_peer_loan_manager_processes_worker_return_and_closes_loan():
         "status": "available",
     }
     registry.upsert_worker(worker)
-    manager = PeerLoanManager(registry, master_identity=master_identity)
+    manager = PeerLoanManager(registry, master_identity=master_identity, ledger_path=tmp_path / "loan_ledger.json")
 
     requester_master = {**master_identity, "port": 9005}
     decision = manager.process_request_help({"requester_master": requester_master, "workers_needed": 1, "tasks_pending": 1}, source={"group_label": "p2p-cluster", "node_id": "66666666-6666-4666-8666-666666666666", "node_label": "grupo_07_master_02", "node_role": "master"})
@@ -552,13 +552,30 @@ def test_peer_loan_manager_processes_worker_return_and_closes_loan():
     assert committed["status"] == "accepted"
     assert committed["requester_master"]["node_id"] == requester_master["node_id"]
 
-    notify = manager.process_notify_worker_returned(decision["loan_id"], worker=worker, assignment_epoch=0)
+    epoch = committed["assignment_epoch"]
+    assert epoch == decision["assignment_epoch"] + 1
+
+    stale = manager.process_notify_worker_returned(
+        decision["loan_id"], worker=worker, assignment_epoch=epoch - 1
+    )
+    assert stale["status"] == "rejected"
+    assert stale["reason"]["code"] == "stale_epoch"
+
+    notify = manager.process_notify_worker_returned(
+        decision["loan_id"], worker=worker, assignment_epoch=epoch
+    )
     assert notify["status"] == "accepted"
     assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "closed"
 
-    ack = manager.process_return_ack(decision["loan_id"], worker=worker, assignment_epoch=0, status="returned")
+    ack = manager.process_return_ack(
+        decision["loan_id"], worker=worker,
+        assignment_epoch=epoch + 1, status="returned"
+    )
     assert ack["status"] == "accepted"
     assert manager.get_loan_status(decision["loan_id"])["loan_state"] == "closed"
+    assert registry.get_worker(worker["node_id"])["assignment_epoch"] == epoch + 1
+    assert registry.get_worker(worker["node_id"])["status"] == "available"
+
 
 
 def test_worker_manager_processes_command_release_and_returns_to_home_master(tmp_path):
@@ -608,7 +625,7 @@ def test_worker_manager_processes_command_release_and_returns_to_home_master(tmp
     assert config["home_master"]["node_id"] == home_master["node_id"]
 
 
-def test_peer_loan_manager_rejects_when_local_capacity_is_too_low():
+def test_peer_loan_manager_rejects_when_local_capacity_is_too_low(tmp_path):
     master_identity = {
         "group_label": "p2p-cluster",
         "node_id": "77777777-7777-4777-8777-777777777777",
@@ -636,7 +653,7 @@ def test_peer_loan_manager_rejects_when_local_capacity_is_too_low():
     for i in range(5):
         task_queue.submit({"task_id": f"local-task-{i}"})
 
-    manager = PeerLoanManager(registry, master_identity=master_identity, task_queue=task_queue)
+    manager = PeerLoanManager(registry, master_identity=master_identity, task_queue=task_queue, ledger_path=tmp_path / "loan_ledger.json")
     decision = manager.process_request_help({
         "requester_master": master_identity,
         "workers_needed": 1,

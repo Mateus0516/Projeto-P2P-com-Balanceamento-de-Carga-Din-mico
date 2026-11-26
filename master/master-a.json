@@ -14,7 +14,7 @@
   "collector_host": "10.62.220.21",
   "collector_port": 9100,
   "performance_interval_seconds": 10.0,
-  "min_home_workers": 0,
+  "min_home_workers": 1,
   "peers": [
     {
       "node_role": "master",
